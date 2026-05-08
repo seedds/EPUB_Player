@@ -85,37 +85,89 @@ struct EPUBPackageInfo {
     }
 }
 
+struct EPUBArchiveAsset {
+    let path: String
+    let mediaType: String?
+    let data: Data
+
+    nonisolated var pathExtension: String {
+        let fileExtension = URL(fileURLWithPath: path).pathExtension
+        if !fileExtension.isEmpty {
+            return fileExtension
+        }
+
+        switch mediaType?.lowercased() {
+        case "image/jpeg":
+            return "jpg"
+        case "image/png":
+            return "png"
+        case "image/gif":
+            return "gif"
+        case "image/webp":
+            return "webp"
+        case "image/svg+xml":
+            return "svg"
+        default:
+            return "img"
+        }
+    }
+}
+
 enum EPUBMetadataService {
-    nonisolated static func metadata(in extractedDirectory: URL) -> EPUBMetadata {
-        guard let package = packageInfo(in: extractedDirectory) else {
+    nonisolated private static var virtualRootURL: URL {
+        URL(fileURLWithPath: "/virtual-epub-root", isDirectory: true)
+    }
+
+    nonisolated static func metadata(at epubURL: URL) throws -> EPUBMetadata {
+        let archive = try EPUBArchive(url: epubURL)
+        guard let package = try packageInfo(in: archive) else {
             return EPUBMetadata()
         }
 
-        return metadata(in: extractedDirectory, package: package)
+        return metadata(from: package)
     }
 
-    nonisolated static func metadata(in extractedDirectory: URL, package: EPUBPackageInfo) -> EPUBMetadata {
-        let coverPath = coverImagePath(
-            in: package,
-            extractedDirectory: extractedDirectory
-        )
-
-        return EPUBMetadata(
+    nonisolated static func metadata(from package: EPUBPackageInfo) -> EPUBMetadata {
+        EPUBMetadata(
             title: clean(package.title),
             author: clean(package.creator),
             language: clean(package.language),
             identifier: clean(package.identifier),
-            coverImagePath: coverPath
+            coverImagePath: nil
         )
     }
 
-    nonisolated static func packageInfo(in extractedDirectory: URL) -> EPUBPackageInfo? {
-        guard let packageURL = packageDocumentURL(in: extractedDirectory) else {
+    nonisolated static func packageInfo(in archive: EPUBArchive) throws -> EPUBPackageInfo? {
+        guard let containerData = try archive.data(for: "META-INF/container.xml") else {
             return nil
         }
 
-        let parser = OPFParser(packageURL: packageURL)
-        return parser.parse(url: packageURL)
+        let parser = ContainerParser()
+        guard let fullPath = parser.parse(data: containerData),
+              let packageURL = resolvedURL(for: fullPath, relativeTo: virtualRootURL, root: virtualRootURL),
+              let packagePath = AppStorage.relativePath(from: packageURL.path, under: virtualRootURL.path),
+              let packageData = try archive.data(for: packagePath)
+        else {
+            return nil
+        }
+
+        return OPFParser(packageURL: packageURL).parse(data: packageData)
+    }
+
+    nonisolated static func coverImageAsset(in archive: EPUBArchive, package: EPUBPackageInfo) throws -> EPUBArchiveAsset? {
+        guard let coverItem = coverManifestItem(in: package),
+              let coverURL = resolvedURL(
+                for: coverItem.href,
+                relativeTo: package.packageURL.deletingLastPathComponent(),
+                root: virtualRootURL
+              ),
+              let coverPath = AppStorage.relativePath(from: coverURL.path, under: virtualRootURL.path),
+              let coverData = try archive.data(for: coverPath)
+        else {
+            return nil
+        }
+
+        return EPUBArchiveAsset(path: coverPath, mediaType: coverItem.mediaType, data: coverData)
     }
 
     nonisolated static func resolvedURL(for href: String, relativeTo baseURL: URL, root: URL) -> URL? {
@@ -137,35 +189,12 @@ enum EPUBMetadataService {
         return url
     }
 
-    nonisolated private static func packageDocumentURL(in extractedDirectory: URL) -> URL? {
-        let containerURL = extractedDirectory
-            .appendingPathComponent("META-INF", isDirectory: true)
-            .appendingPathComponent("container.xml", isDirectory: false)
-
-        let parser = ContainerParser()
-        guard let fullPath = parser.parse(url: containerURL) else {
-            return nil
-        }
-
-        return resolvedURL(for: fullPath, relativeTo: extractedDirectory, root: extractedDirectory)
-    }
-
-    nonisolated private static func coverImagePath(in package: EPUBPackageInfo, extractedDirectory: URL) -> String? {
-        let coverItem = package.manifestItems.first { item in
+    nonisolated private static func coverManifestItem(in package: EPUBPackageInfo) -> EPUBPackageInfo.ManifestItem? {
+        package.manifestItems.first { item in
             item.properties.contains("cover-image")
         } ?? package.manifestItems.first { item in
             package.coverItemId != nil && item.id == package.coverItemId
         }
-
-        guard let href = coverItem?.href else {
-            return nil
-        }
-
-        let packageDirectory = package.packageURL.deletingLastPathComponent()
-        guard let coverURL = resolvedURL(for: href, relativeTo: packageDirectory, root: extractedDirectory) else {
-            return nil
-        }
-        return AppStorage.relativePath(from: coverURL.path, under: extractedDirectory.path)
     }
 
     nonisolated private static func clean(_ value: String?) -> String? {
@@ -181,13 +210,15 @@ nonisolated private final class ContainerParser: NSObject, XMLParserDelegate {
         super.init()
     }
 
-    nonisolated func parse(url: URL) -> String? {
-        guard let parser = XMLParser(contentsOf: url) else {
-            return nil
-        }
+    nonisolated func parse(data: Data) -> String? {
+        parse(XMLParser(data: data))
+        return fullPath
+    }
+
+    nonisolated private func parse(_ parser: XMLParser) {
+        fullPath = nil
         parser.delegate = self
         parser.parse()
-        return fullPath
     }
 
     nonisolated func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
@@ -207,13 +238,14 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
         package = EPUBPackageInfo(packageURL: packageURL)
     }
 
-    nonisolated func parse(url: URL) -> EPUBPackageInfo? {
-        guard let parser = XMLParser(contentsOf: url) else {
-            return nil
-        }
+    nonisolated func parse(data: Data) -> EPUBPackageInfo? {
+        parse(XMLParser(data: data))
+        return package
+    }
+
+    nonisolated private func parse(_ parser: XMLParser) {
         parser.delegate = self
         parser.parse()
-        return package
     }
 
     nonisolated func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {

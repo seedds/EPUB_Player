@@ -38,6 +38,8 @@ final class MediaOverlayPlaybackController: ObservableObject {
 
     private var player: AVPlayer?
     private var loadedAudioPath: String?
+    private var currentBookID: UUID?
+    private var currentEPUBURL: URL?
     private var boundaryObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var currentTransitionID: Int?
@@ -50,9 +52,11 @@ final class MediaOverlayPlaybackController: ObservableObject {
         return clips[currentClipIndex]
     }
 
-    func load(from jsonURL: URL?) async {
+    func load(for book: Book, from jsonURL: URL?) async {
         stop(reason: "load")
         cachedAudioDurations = [:]
+        currentBookID = book.id
+        currentEPUBURL = try? book.resolvedEPUBFileURL()
 
         guard let jsonURL else {
             state = .unavailable
@@ -80,26 +84,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
     nonisolated private static func resolvedClips(from jsonURL: URL) throws -> [EPUBMediaOverlayClip] {
         let data = try Data(contentsOf: jsonURL)
         let manifest = try JSONDecoder().decode(EPUBMediaOverlayManifest.self, from: data)
-        let extractedDirectoryURL = jsonURL.deletingLastPathComponent()
-
-        return manifest.documents
-            .flatMap(\.clips)
-            .compactMap { clip in
-                var resolvedClip = clip
-                let audioFileURL: URL
-                if clip.audioPath.hasPrefix("/") {
-                    audioFileURL = URL(fileURLWithPath: clip.audioPath)
-                } else {
-                    audioFileURL = extractedDirectoryURL.appendingPathComponent(clip.audioPath, isDirectory: false)
-                }
-
-                guard FileManager.default.fileExists(atPath: audioFileURL.path) else {
-                    return nil
-                }
-
-                resolvedClip.audioPath = audioFileURL.path
-                return resolvedClip
-            }
+        return manifest.documents.flatMap(\.clips)
     }
 
     func togglePlayback() {
@@ -263,41 +248,51 @@ final class MediaOverlayPlaybackController: ObservableObject {
             return
         }
 
-        let player = preparedPlayer(for: clip)
-        player.pause()
-        player.seek(to: CMTime(seconds: clip.clipBegin, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, clip, player] _ in
+        Task { @MainActor [weak self] in
             guard let self else { return }
-            DispatchQueue.main.async {
-                guard self.isCurrentClip(clip) else {
-                    return
-                }
 
-                guard self.currentTransitionID == transitionID else {
-                    return
-                }
+            do {
+                let player = try await self.preparedPlayer(for: clip)
+                player.pause()
+                player.seek(to: CMTime(seconds: clip.clipBegin, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, clip, player] _ in
+                    guard let self else { return }
+                    DispatchQueue.main.async {
+                        guard self.isCurrentClip(clip) else {
+                            return
+                        }
 
-                self.addObservers(for: clip, reason: reason, transitionID: transitionID)
-                player.play()
-                self.state = .playing
-                self.applyPlaybackRateIfNeeded(
-                    player: player,
-                    shouldUpdateActiveRate: true,
-                    reason: "start[\(reason)]",
-                    transitionID: transitionID
-                )
+                        guard self.currentTransitionID == transitionID else {
+                            return
+                        }
+
+                        self.addObservers(for: clip, reason: reason, transitionID: transitionID)
+                        player.play()
+                        self.state = .playing
+                        self.applyPlaybackRateIfNeeded(
+                            player: player,
+                            shouldUpdateActiveRate: true,
+                            reason: "start[\(reason)]",
+                            transitionID: transitionID
+                        )
+                        self.scheduleRefreshJumpAvailability()
+                    }
+                }
+            } catch {
+                self.state = .failed(error.localizedDescription)
                 self.scheduleRefreshJumpAvailability()
             }
         }
     }
 
-    private func preparedPlayer(for clip: EPUBMediaOverlayClip) -> AVPlayer {
+    private func preparedPlayer(for clip: EPUBMediaOverlayClip) async throws -> AVPlayer {
+        let audioURL = try await resolvedAudioFileURL(for: clip.audioPath)
         if let player,
            loadedAudioPath == clip.audioPath,
            player.currentItem != nil {
             return player
         }
 
-        let item = AVPlayerItem(url: URL(fileURLWithPath: clip.audioPath))
+        let item = AVPlayerItem(url: audioURL)
         item.audioTimePitchAlgorithm = .timeDomain
 
         if let player {
@@ -310,6 +305,24 @@ final class MediaOverlayPlaybackController: ObservableObject {
         self.player = player
         loadedAudioPath = clip.audioPath
         return player
+    }
+
+    private func resolvedAudioFileURL(for audioPath: String) async throws -> URL {
+        if audioPath.hasPrefix("/") {
+            return URL(fileURLWithPath: audioPath)
+        }
+
+        guard let currentBookID, let currentEPUBURL else {
+            throw BookAssetCacheError.missingArchiveEntry(audioPath)
+        }
+
+        return try await Task.detached(priority: .userInitiated) {
+            try BookAssetCacheService.materializeAudioAsset(
+                resourcePath: audioPath,
+                bookID: currentBookID,
+                epubURL: currentEPUBURL
+            )
+        }.value
     }
 
     private func applyPlaybackRateIfNeeded(
@@ -510,7 +523,14 @@ final class MediaOverlayPlaybackController: ObservableObject {
             return currentItemDuration
         }
 
-        let asset = AVURLAsset(url: URL(fileURLWithPath: audioPath))
+        let assetURL: URL
+        do {
+            assetURL = try await resolvedAudioFileURL(for: audioPath)
+        } catch {
+            return 0
+        }
+
+        let asset = AVURLAsset(url: assetURL)
         let assetDuration: Double
         do {
             assetDuration = try await asset.load(.duration).seconds

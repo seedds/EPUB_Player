@@ -8,9 +8,15 @@
 import Foundation
 import SwiftData
 
+enum MediaOverlayPreparationState: String, CaseIterable {
+    case pending
+    case processing
+    case ready
+    case failed
+}
+
 struct NormalizedBookStoragePaths: Equatable {
     let epubFilePath: String
-    let extractedDirectoryPath: String
     let coverImagePath: String?
     let mediaOverlayJSONPath: String?
 }
@@ -22,7 +28,6 @@ final class Book {
     var author: String
     var originalFilename: String
     var epubFilePath: String
-    var extractedDirectoryPath: String = ""
     var coverImagePath: String?
     var language: String?
     var metadataIdentifier: String?
@@ -35,6 +40,8 @@ final class Book {
     var mediaOverlayActiveClass: String?
     var mediaOverlayDuration: Double?
     var mediaOverlayClipCount: Int?
+    var mediaOverlayPreparationStateRawValue: String
+    var mediaOverlayPreparationError: String?
     var sourceFileSize: Int64?
     var sourceFileModifiedAt: Date?
     var importedAt: Date
@@ -46,7 +53,6 @@ final class Book {
         author: String = "Unknown Author",
         originalFilename: String,
         epubFilePath: String,
-        extractedDirectoryPath: String,
         coverImagePath: String? = nil,
         language: String? = nil,
         metadataIdentifier: String? = nil,
@@ -59,6 +65,8 @@ final class Book {
         mediaOverlayActiveClass: String? = nil,
         mediaOverlayDuration: Double? = nil,
         mediaOverlayClipCount: Int? = nil,
+        mediaOverlayPreparationStateRawValue: String = MediaOverlayPreparationState.pending.rawValue,
+        mediaOverlayPreparationError: String? = nil,
         sourceFileSize: Int64? = nil,
         sourceFileModifiedAt: Date? = nil,
         importedAt: Date = Date(),
@@ -69,7 +77,6 @@ final class Book {
         self.author = author
         self.originalFilename = originalFilename
         self.epubFilePath = epubFilePath
-        self.extractedDirectoryPath = extractedDirectoryPath
         self.coverImagePath = coverImagePath
         self.language = language
         self.metadataIdentifier = metadataIdentifier
@@ -82,6 +89,8 @@ final class Book {
         self.mediaOverlayActiveClass = mediaOverlayActiveClass
         self.mediaOverlayDuration = mediaOverlayDuration
         self.mediaOverlayClipCount = mediaOverlayClipCount
+        self.mediaOverlayPreparationStateRawValue = mediaOverlayPreparationStateRawValue
+        self.mediaOverlayPreparationError = mediaOverlayPreparationError
         self.sourceFileSize = sourceFileSize
         self.sourceFileModifiedAt = sourceFileModifiedAt
         self.importedAt = importedAt
@@ -90,17 +99,24 @@ final class Book {
 }
 
 extension Book {
+    var mediaOverlayPreparationState: MediaOverlayPreparationState {
+        get {
+            MediaOverlayPreparationState(rawValue: mediaOverlayPreparationStateRawValue) ?? .pending
+        }
+        set {
+            mediaOverlayPreparationStateRawValue = newValue.rawValue
+        }
+    }
+
     nonisolated var normalizedStoragePaths: NormalizedBookStoragePaths {
         let normalizedEPUBPath = AppStorage.sanitizedFilename(
             originalFilename.isEmpty ? URL(fileURLWithPath: epubFilePath).lastPathComponent : originalFilename
         )
-        let normalizedExtractedDirectoryPath = id.uuidString
 
         return NormalizedBookStoragePaths(
             epubFilePath: normalizedEPUBPath,
-            extractedDirectoryPath: normalizedExtractedDirectoryPath,
-            coverImagePath: normalizedExtractedSubpath(for: coverImagePath),
-            mediaOverlayJSONPath: normalizedExtractedSubpath(for: mediaOverlayJSONPath)
+            coverImagePath: normalizedCachedAssetPath(for: coverImagePath),
+            mediaOverlayJSONPath: normalizedCachedAssetPath(for: mediaOverlayJSONPath)
         )
     }
 
@@ -108,34 +124,44 @@ extension Book {
         try AppStorage.bookFileURL(named: normalizedStoragePaths.epubFilePath)
     }
 
-    nonisolated func resolvedExtractedDirectoryURL() throws -> URL {
-        try AppStorage.extractedDirectory(for: id)
-    }
-
     nonisolated func resolvedCoverImageURL() throws -> URL? {
-        guard let relativePath = normalizedStoragePaths.coverImagePath else {
+        guard let storedPath = normalizedStoragePaths.coverImagePath else {
             return nil
         }
-        return try resolvedExtractedDirectoryURL().appendingPathComponent(relativePath, isDirectory: false)
+
+        if storedPath.hasPrefix("/") {
+            return URL(fileURLWithPath: storedPath)
+        }
+
+        return try AppStorage.coversDirectory().appendingPathComponent(storedPath, isDirectory: false)
     }
 
     nonisolated func resolvedMediaOverlayJSONURL() throws -> URL? {
-        guard let relativePath = normalizedStoragePaths.mediaOverlayJSONPath else {
+        guard let storedPath = normalizedStoragePaths.mediaOverlayJSONPath else {
             return nil
         }
-        return try resolvedExtractedDirectoryURL().appendingPathComponent(relativePath, isDirectory: false)
+
+        if storedPath.hasPrefix("/") {
+            return URL(fileURLWithPath: storedPath)
+        }
+
+        return try AppStorage.mediaOverlaysDirectory().appendingPathComponent(storedPath, isDirectory: false)
     }
 
-    nonisolated private func normalizedExtractedSubpath(for path: String?) -> String? {
+    nonisolated private func normalizedCachedAssetPath(for path: String?) -> String? {
         guard let path, !path.isEmpty else {
             return nil
         }
 
         if path.hasPrefix("/") {
-            if let relativePath = AppStorage.relativePath(from: path, under: extractedDirectoryPath) {
+            if let coversDirectory = try? AppStorage.coversDirectory(),
+               let relativePath = AppStorage.relativePath(from: path, under: coversDirectory.path) {
                 return relativePath
             }
-            return URL(fileURLWithPath: path).lastPathComponent
+            if let overlaysDirectory = try? AppStorage.mediaOverlaysDirectory(),
+               let relativePath = AppStorage.relativePath(from: path, under: overlaysDirectory.path) {
+                return relativePath
+            }
         }
 
         return path

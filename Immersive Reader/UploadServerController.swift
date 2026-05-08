@@ -469,9 +469,7 @@ final class UploadServerController: ObservableObject {
         if let epubURL = try? book.resolvedEPUBFileURL() {
             try? FileManager.default.removeItem(at: epubURL)
         }
-        if let extractedURL = try? book.resolvedExtractedDirectoryURL() {
-            try? FileManager.default.removeItem(at: extractedURL)
-        }
+        try? BookAssetCacheService.removeAllCachedAssets(for: book.id)
         modelContext.delete(book)
         try modelContext.save()
     }

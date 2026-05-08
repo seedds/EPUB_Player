@@ -91,21 +91,44 @@ nonisolated struct EPUBMediaOverlayParseResult {
 }
 
 enum EPUBMediaOverlayService {
-    nonisolated static func parseAndWrite(in extractedDirectory: URL, package: EPUBPackageInfo) throws -> EPUBMediaOverlayParseResult? {
-        guard let manifest = parse(in: extractedDirectory, package: package), manifest.clipCount > 0 else {
+    nonisolated static func parseAndWrite(at epubURL: URL, bookID: UUID) throws -> EPUBMediaOverlayParseResult? {
+        let archive = try EPUBArchive(url: epubURL)
+        guard let package = try EPUBMetadataService.packageInfo(in: archive) else {
+            return nil
+        }
+        guard let manifest = try parse(in: archive, package: package), manifest.clipCount > 0 else {
             return nil
         }
 
-        let jsonURL = extractedDirectory.appendingPathComponent("media-overlays.json", isDirectory: false)
+        let jsonURL = try AppStorage.mediaOverlayManifestURL(for: bookID)
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(manifest)
         try data.write(to: jsonURL, options: .atomic)
-
         return EPUBMediaOverlayParseResult(manifest: manifest, jsonURL: jsonURL)
     }
 
-    nonisolated private static func parse(in extractedDirectory: URL, package: EPUBPackageInfo) -> EPUBMediaOverlayManifest? {
+    nonisolated private static func parse(in archive: EPUBArchive, package: EPUBPackageInfo) throws -> EPUBMediaOverlayManifest? {
+        let virtualRoot = URL(fileURLWithPath: "/virtual-epub-root", isDirectory: true)
+        return try parseInternal(root: virtualRoot, package: package) { smilURL in
+            guard let smilPath = AppStorage.relativePath(from: smilURL.path, under: virtualRoot.path),
+                  let smilData = try archive.data(for: smilPath)
+            else {
+                return []
+            }
+
+            return SMILParser(
+                rootURL: virtualRoot,
+                smilURL: smilURL,
+                smilData: smilData
+            ).parse()
+        }
+    }
+
+    nonisolated private static func parseInternal(
+        root: URL,
+        package: EPUBPackageInfo,
+        clipLoader: (URL) throws -> [EPUBMediaOverlayClip]
+    ) throws -> EPUBMediaOverlayManifest? {
         let packageDirectory = package.packageURL.deletingLastPathComponent()
         var smilItemsById: [String: EPUBPackageInfo.ManifestItem] = [:]
         for item in package.manifestItems where isSMIL(item) {
@@ -127,26 +150,22 @@ enum EPUBMediaOverlayService {
             candidates = smilItemsById.values.map { (nil, $0) }
         }
 
-        let documents = candidates.compactMap { contentItem, smilItem -> EPUBMediaOverlayDocument? in
+        let documents = try candidates.compactMap { contentItem, smilItem -> EPUBMediaOverlayDocument? in
             guard let smilURL = EPUBMetadataService.resolvedURL(
                 for: smilItem.href,
                 relativeTo: packageDirectory,
-                root: extractedDirectory
+                root: root
             ) else {
                 return nil
             }
 
-            let parser = SMILParser(
-                extractedDirectory: extractedDirectory,
-                smilURL: smilURL
-            )
-            let clips = parser.parse()
+            let clips = try clipLoader(smilURL)
             guard !clips.isEmpty else {
                 return nil
             }
 
             return EPUBMediaOverlayDocument(
-                smilHref: relativePath(for: smilURL, root: extractedDirectory) ?? smilItem.href,
+                smilHref: relativePath(for: smilURL, root: root) ?? smilItem.href,
                 smilPath: smilURL.path,
                 associatedContentHref: contentItem?.href,
                 clips: clips
@@ -232,20 +251,20 @@ nonisolated private final class SMILParser: NSObject, XMLParserDelegate {
         var clipEnd: Double?
     }
 
-    private let extractedDirectory: URL
+    private let rootURL: URL
     private let smilURL: URL
+    private let smilData: Data
     private var parStack: [ParBuilder] = []
     private var clips: [EPUBMediaOverlayClip] = []
 
-    nonisolated init(extractedDirectory: URL, smilURL: URL) {
-        self.extractedDirectory = extractedDirectory
+    nonisolated init(rootURL: URL, smilURL: URL, smilData: Data) {
+        self.rootURL = rootURL
         self.smilURL = smilURL
+        self.smilData = smilData
     }
 
     nonisolated func parse() -> [EPUBMediaOverlayClip] {
-        guard let parser = XMLParser(contentsOf: smilURL) else {
-            return []
-        }
+        let parser = XMLParser(data: smilData)
         parser.delegate = self
         parser.parse()
         return clips
@@ -305,8 +324,8 @@ nonisolated private final class SMILParser: NSObject, XMLParserDelegate {
         guard let fileURL = EPUBMetadataService.resolvedURL(
             for: href,
             relativeTo: smilDirectory,
-            root: extractedDirectory
-        ), let resourceHref = EPUBMediaOverlayService.relativePath(for: fileURL, root: extractedDirectory) else {
+            root: rootURL
+        ), let resourceHref = EPUBMediaOverlayService.relativePath(for: fileURL, root: rootURL) else {
             return nil
         }
 

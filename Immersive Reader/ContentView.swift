@@ -12,8 +12,10 @@ import UniformTypeIdentifiers
 import ReadiumShared
 
 struct ContentView: View {
+    @Environment(\.modelContext) private var modelContext
     @StateObject private var uploadServer = UploadServerController()
     @SwiftUI.AppStorage(ReaderSettings.themeKey) private var themeRawValue = AppThemeOption.system.rawValue
+    @State private var hasResumedPendingMediaOverlayPreparation = false
 
     var body: some View {
         TabView {
@@ -33,6 +35,16 @@ struct ContentView: View {
                 }
         }
         .preferredColorScheme(ReaderSettings.appTheme(from: themeRawValue).preferredColorScheme)
+        .task {
+            guard !hasResumedPendingMediaOverlayPreparation else {
+                return
+            }
+            hasResumedPendingMediaOverlayPreparation = true
+            if (try? await BookLibraryResetService.resetForEPUBOnlyImportIfNeeded(modelContext: modelContext)) == true {
+                try? await BookImportService.refreshBooksFromDocuments(modelContext: modelContext)
+            }
+            MediaOverlayPreparationCoordinator.shared.resumePendingBooks(modelContext: modelContext)
+        }
     }
 }
 
@@ -155,9 +167,7 @@ private struct BooksView: View {
             if let epubURL = try? book.resolvedEPUBFileURL() {
                 try? fileManager.removeItem(at: epubURL)
             }
-            if let extractedURL = try? book.resolvedExtractedDirectoryURL() {
-                try? fileManager.removeItem(at: extractedURL)
-            }
+            try? BookAssetCacheService.removeAllCachedAssets(for: book.id)
             modelContext.delete(book)
         }
 
@@ -291,6 +301,15 @@ private struct BookRow: View {
                             .font(.subheadline)
                             .foregroundStyle(.green)
                             .accessibilityLabel("Read aloud ready")
+                    } else if book.mediaOverlayPreparationState == .pending || book.mediaOverlayPreparationState == .processing {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("Preparing read aloud")
+                    } else if book.mediaOverlayPreparationState == .failed {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.subheadline)
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel("Read aloud unavailable")
                     }
 
                     BookProgressRing(progress: readingProgress)

@@ -49,162 +49,7 @@ struct ReaderView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             case .ready(_, let navigator):
-                ZStack(alignment: .trailing) {
-                    EPUBNavigatorHost(
-                        navigator: navigator,
-                        onLocationDidChange: { locator in
-                            handleLocationDidChange(locator, navigator: navigator)
-                        },
-                        onAudioTap: { reference in
-                            Task {
-                                await playFromTappedReference(reference, navigator: navigator)
-                            }
-                        }
-                    )
-                    .background {
-                        GeometryReader { proxy in
-                            Color.clear
-                                .preference(key: NavigatorFramePreferenceKey.self, value: proxy.frame(in: .global))
-                        }
-                    }
-                    .overlay {
-                        if isBottomControlPresented {
-                            Color.black.opacity(0.001)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    dismissBottomControls()
-                                }
-                        }
-                    }
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        if !playback.clips.isEmpty {
-                            MediaOverlayPlaybackBar(
-                                playback: playback,
-                                playbackSpeed: $readerPlaybackSpeed,
-                                playbackJumpInterval: readerPlaybackJumpInterval,
-                                fontSize: $readerFontSize,
-                                lineHeight: $readerLineHeight,
-                                fontFamilyRawValue: $readerFontFamilyRawValue,
-                                customFontFamilies: customFontFamilies,
-                                isSpeedControlPresented: $isPlaybackSpeedControlPresented,
-                                isReaderSettingsControlPresented: $isReaderSettingsControlPresented,
-                                toggleSpeedControl: togglePlaybackSpeedControl,
-                                toggleReaderSettingsControl: toggleReaderSettingsControl,
-                                 playPause: {
-                                     if playback.state.isPlaying {
-                                         playback.pause(reason: "playPauseButton.pause")
-                                     } else if playback.currentClipIndex != nil {
-                                         playback.play(reason: "playPauseButton.resumeCurrentClip")
-                                     } else {
-                                         Task {
-                                            await startPlaybackFromVisibleOrForwardPosition(with: navigator)
-                                        }
-                                    }
-                                },
-                                previous: {
-                                    Task {
-                                        await playback.jump(
-                                            by: -ReaderSettings.normalizedPlaybackJumpInterval(readerPlaybackJumpInterval),
-                                            reason: "playbackBar.previousButton"
-                                        )
-                                    }
-                                },
-                                next: {
-                                    Task {
-                                        await playback.jump(
-                                            by: ReaderSettings.normalizedPlaybackJumpInterval(readerPlaybackJumpInterval),
-                                            reason: "playbackBar.nextButton"
-                                        )
-                                    }
-                                }
-                            )
-                            .background {
-                                GeometryReader { proxy in
-                                    Color.clear
-                                        .preference(key: PlaybackBarFramePreferenceKey.self, value: proxy.frame(in: .global))
-                                }
-                            }
-                        }
-                    }
-
-                    if isChapterDrawerPresented {
-                        Color.black.opacity(0.2)
-                            .ignoresSafeArea()
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    isChapterDrawerPresented = false
-                                }
-                            }
-
-                        ChapterDrawer(
-                            items: chapterItems,
-                            selectedItemID: activeChapterItemID,
-                            onSelect: { item in
-                                Task {
-                                    await selectChapter(item, navigator: navigator)
-                                }
-                            },
-                            onClose: {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    isChapterDrawerPresented = false
-                                }
-                            }
-                        )
-                        .transition(.move(edge: .trailing))
-                    }
-                }
-                .onChange(of: playback.currentClipIndex) { oldIndex, newIndex in
-                    handleCurrentClipChange(oldIndex: oldIndex, newIndex: newIndex, navigator: navigator)
-                }
-                .onChange(of: playback.state) { oldValue, newValue in
-                    if oldValue.isPlaying && !newValue.isPlaying {
-                        lastHandledPlaybackStartClipKey = nil
-                        return
-                    }
-
-                    guard !oldValue.isPlaying, newValue.isPlaying else {
-                        return
-                    }
-
-                    Task {
-                        await handleClipPlaybackStartIfNeeded(with: navigator)
-                    }
-                }
-                .onChange(of: readerFontSize) { _, _ in
-                    Task {
-                        await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
-                    }
-                }
-                .onChange(of: readerLineHeight) { _, _ in
-                    Task {
-                        await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
-                    }
-                }
-                .onChange(of: readerFontFamilyRawValue) { _, _ in
-                    Task {
-                        await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
-                    }
-                }
-                .onChange(of: readerThemeRawValue) { _, _ in
-                    applyReaderPreferences(to: navigator)
-                }
-                .onChange(of: readerReadAloudColorRawValue) { _, _ in
-                    applyCurrentClipDecoration(with: navigator)
-                }
-                .onChange(of: readerPlaybackSpeed) { _, newValue in
-                    playback.setPlaybackRate(newValue)
-                }
-                .onChange(of: readerPlaybackJumpInterval) { _, newValue in
-                    playback.setJumpInterval(newValue)
-                }
-                .onChange(of: colorScheme) { _, _ in
-                    if ReaderSettings.appTheme(from: readerThemeRawValue) == .system {
-                        applyReaderPreferences(to: navigator)
-                    }
-                }
-                .onPreferenceChange(NavigatorFramePreferenceKey.self) { navigatorFrame = $0 }
-                .onPreferenceChange(PlaybackBarFramePreferenceKey.self) { playbackBarFrame = $0 }
+                readyReaderView(for: navigator)
 
             case .failed(let message):
                 ContentUnavailableView(
@@ -254,7 +99,7 @@ struct ReaderView: View {
         try? modelContext.save()
         playback.setPlaybackRate(readerPlaybackSpeed)
         playback.setJumpInterval(readerPlaybackJumpInterval)
-        await playback.load(from: try? book.resolvedMediaOverlayJSONURL())
+        await loadMediaOverlaysIfAvailable()
         customFontFamilies = CustomFontStore.allFamilies()
 
         do {
@@ -291,6 +136,212 @@ struct ReaderView: View {
             scroll: true,
             theme: ReaderSettings.appTheme(from: readerThemeRawValue).readiumTheme(for: colorScheme)
         )
+    }
+
+    @ViewBuilder
+    private func readyReaderView(for navigator: EPUBNavigatorViewController) -> some View {
+        ZStack(alignment: .trailing) {
+            navigatorHost(for: navigator)
+            chapterOverlay(for: navigator)
+        }
+        .onChange(of: playback.currentClipIndex) { oldIndex, newIndex in
+            handleCurrentClipChange(oldIndex: oldIndex, newIndex: newIndex, navigator: navigator)
+        }
+        .onChange(of: playback.state) { oldValue, newValue in
+            if oldValue.isPlaying && !newValue.isPlaying {
+                lastHandledPlaybackStartClipKey = nil
+                return
+            }
+
+            guard !oldValue.isPlaying, newValue.isPlaying else {
+                return
+            }
+
+            Task {
+                await handleClipPlaybackStartIfNeeded(with: navigator)
+            }
+        }
+        .onChange(of: readerFontSize) { _, _ in
+            Task {
+                await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
+            }
+        }
+        .onChange(of: readerLineHeight) { _, _ in
+            Task {
+                await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
+            }
+        }
+        .onChange(of: readerFontFamilyRawValue) { _, _ in
+            Task {
+                await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
+            }
+        }
+        .onChange(of: readerThemeRawValue) { _, _ in
+            applyReaderPreferences(to: navigator)
+        }
+        .onChange(of: readerReadAloudColorRawValue) { _, _ in
+            applyCurrentClipDecoration(with: navigator)
+        }
+        .onChange(of: readerPlaybackSpeed) { _, newValue in
+            playback.setPlaybackRate(newValue)
+        }
+        .onChange(of: readerPlaybackJumpInterval) { _, newValue in
+            playback.setJumpInterval(newValue)
+        }
+        .onChange(of: book.mediaOverlayPreparationStateRawValue) { _, _ in
+            Task {
+                await loadMediaOverlaysIfAvailable()
+            }
+        }
+        .onChange(of: book.mediaOverlayJSONPath) { _, _ in
+            Task {
+                await loadMediaOverlaysIfAvailable()
+            }
+        }
+        .onChange(of: colorScheme) { _, _ in
+            if ReaderSettings.appTheme(from: readerThemeRawValue) == .system {
+                applyReaderPreferences(to: navigator)
+            }
+        }
+        .onPreferenceChange(NavigatorFramePreferenceKey.self) { navigatorFrame = $0 }
+        .onPreferenceChange(PlaybackBarFramePreferenceKey.self) { playbackBarFrame = $0 }
+    }
+
+    @ViewBuilder
+    private func navigatorHost(for navigator: EPUBNavigatorViewController) -> some View {
+        EPUBNavigatorHost(
+            navigator: navigator,
+            onLocationDidChange: { locator in
+                handleLocationDidChange(locator, navigator: navigator)
+            },
+            onAudioTap: { reference in
+                Task {
+                    await playFromTappedReference(reference, navigator: navigator)
+                }
+            }
+        )
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .preference(key: NavigatorFramePreferenceKey.self, value: proxy.frame(in: .global))
+            }
+        }
+        .overlay {
+            if isBottomControlPresented {
+                Color.black.opacity(0.001)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        dismissBottomControls()
+                    }
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            bottomInset(for: navigator)
+        }
+    }
+
+    @ViewBuilder
+    private func bottomInset(for navigator: EPUBNavigatorViewController) -> some View {
+        if !playback.clips.isEmpty {
+            MediaOverlayPlaybackBar(
+                playback: playback,
+                playbackSpeed: $readerPlaybackSpeed,
+                playbackJumpInterval: readerPlaybackJumpInterval,
+                fontSize: $readerFontSize,
+                lineHeight: $readerLineHeight,
+                fontFamilyRawValue: $readerFontFamilyRawValue,
+                customFontFamilies: customFontFamilies,
+                isSpeedControlPresented: $isPlaybackSpeedControlPresented,
+                isReaderSettingsControlPresented: $isReaderSettingsControlPresented,
+                toggleSpeedControl: togglePlaybackSpeedControl,
+                toggleReaderSettingsControl: toggleReaderSettingsControl,
+                playPause: {
+                    if playback.state.isPlaying {
+                        playback.pause(reason: "playPauseButton.pause")
+                    } else if playback.currentClipIndex != nil {
+                        playback.play(reason: "playPauseButton.resumeCurrentClip")
+                    } else {
+                        Task {
+                            await startPlaybackFromVisibleOrForwardPosition(with: navigator)
+                        }
+                    }
+                },
+                previous: {
+                    Task {
+                        await playback.jump(
+                            by: -ReaderSettings.normalizedPlaybackJumpInterval(readerPlaybackJumpInterval),
+                            reason: "playbackBar.previousButton"
+                        )
+                    }
+                },
+                next: {
+                    Task {
+                        await playback.jump(
+                            by: ReaderSettings.normalizedPlaybackJumpInterval(readerPlaybackJumpInterval),
+                            reason: "playbackBar.nextButton"
+                        )
+                    }
+                }
+            )
+            .background {
+                GeometryReader { proxy in
+                    Color.clear
+                        .preference(key: PlaybackBarFramePreferenceKey.self, value: proxy.frame(in: .global))
+                }
+            }
+        } else if let readAloudStatusMessage {
+            ReadAloudStatusView(message: readAloudStatusMessage)
+        }
+    }
+
+    @ViewBuilder
+    private func chapterOverlay(for navigator: EPUBNavigatorViewController) -> some View {
+        if isChapterDrawerPresented {
+            Color.black.opacity(0.2)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isChapterDrawerPresented = false
+                    }
+                }
+
+            ChapterDrawer(
+                items: chapterItems,
+                selectedItemID: activeChapterItemID,
+                onSelect: { item in
+                    Task {
+                        await selectChapter(item, navigator: navigator)
+                    }
+                },
+                onClose: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isChapterDrawerPresented = false
+                    }
+                }
+            )
+            .transition(.move(edge: .trailing))
+        }
+    }
+
+    @MainActor
+    private func loadMediaOverlaysIfAvailable() async {
+        await playback.load(for: book, from: try? book.resolvedMediaOverlayJSONURL())
+    }
+
+    private var readAloudStatusMessage: String? {
+        guard playback.clips.isEmpty else {
+            return nil
+        }
+
+        switch book.mediaOverlayPreparationState {
+        case .pending, .processing:
+            return "Preparing read-aloud..."
+        case .failed:
+            return "Read-aloud is unavailable for this book. Return to Books and tap Refresh to retry."
+        case .ready:
+            return nil
+        }
     }
 
     private func fontFamilyDeclarations() -> [AnyHTMLFontFamilyDeclaration] {
@@ -1314,6 +1365,21 @@ private func javaScriptStringLiteral(_ value: String) -> String {
 
 private func javaScriptArrayLiteral(_ values: [String]) -> String {
     "[\(values.map(javaScriptStringLiteral).joined(separator: ", "))]"
+}
+
+private struct ReadAloudStatusView: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.footnote)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(.thinMaterial)
+    }
 }
 
 private enum ReaderState {

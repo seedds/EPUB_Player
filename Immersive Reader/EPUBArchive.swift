@@ -73,6 +73,10 @@ struct EPUBArchive {
         }
     }
 
+    nonisolated func containsEntry(at path: String) -> Bool {
+        entries.contains(where: { $0.path == path })
+    }
+
     nonisolated func extract(to destination: URL) throws {
         try validateEPUB()
         let fileManager = FileManager.default
@@ -95,7 +99,7 @@ struct EPUBArchive {
         }
     }
 
-    nonisolated private func data(for path: String) throws -> Data? {
+    nonisolated func data(for path: String) throws -> Data? {
         guard let entry = entries.first(where: { $0.path == path }) else {
             return nil
         }

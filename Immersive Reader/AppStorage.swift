@@ -35,24 +35,55 @@ enum AppStorage {
         )
     }
 
-    nonisolated static func extractedDirectory() throws -> URL {
-        try ensureDirectory(applicationSupportDirectory().appendingPathComponent("Extracted", isDirectory: true))
-    }
-
     nonisolated static func customFontsDirectory() throws -> URL {
         try ensureDirectory(applicationSupportDirectory().appendingPathComponent("CustomFonts", isDirectory: true))
+    }
+
+    nonisolated static func coversDirectory() throws -> URL {
+        try ensureDirectory(applicationSupportDirectory().appendingPathComponent("Covers", isDirectory: true))
+    }
+
+    nonisolated static func mediaOverlaysDirectory() throws -> URL {
+        try ensureDirectory(applicationSupportDirectory().appendingPathComponent("MediaOverlays", isDirectory: true))
+    }
+
+    nonisolated static func audioCacheDirectory() throws -> URL {
+        try ensureDirectory(
+            FileManager.default.temporaryDirectory
+                .appendingPathComponent("Immersive Reader", isDirectory: true)
+                .appendingPathComponent("AudioCache", isDirectory: true)
+        )
     }
 
     nonisolated static func customFontsMetadataURL() throws -> URL {
         try applicationSupportDirectory().appendingPathComponent("custom-fonts.json", isDirectory: false)
     }
 
-    nonisolated static func bookFileURL(named filename: String) throws -> URL {
-        try documentsDirectory().appendingPathComponent(sanitizedFilename(filename), isDirectory: false)
+    nonisolated static func coverImageURL(for bookID: UUID, pathExtension: String) throws -> URL {
+        let ext = pathExtension.isEmpty ? "img" : sanitizedFilename(pathExtension).lowercased()
+        return try coversDirectory().appendingPathComponent("\(bookID.uuidString).\(ext)", isDirectory: false)
     }
 
-    nonisolated static func extractedDirectory(for bookID: UUID) throws -> URL {
-        try extractedDirectory().appendingPathComponent(bookID.uuidString, isDirectory: true)
+    nonisolated static func mediaOverlayManifestURL(for bookID: UUID) throws -> URL {
+        try mediaOverlaysDirectory().appendingPathComponent("\(bookID.uuidString).json", isDirectory: false)
+    }
+
+    nonisolated static func audioCacheDirectory(for bookID: UUID) throws -> URL {
+        try ensureDirectory(audioCacheDirectory().appendingPathComponent(bookID.uuidString, isDirectory: true))
+    }
+
+    nonisolated static func audioCacheFileURL(for bookID: UUID, resourcePath: String) throws -> URL {
+        let resourceURL = URL(fileURLWithPath: resourcePath)
+        let ext = resourceURL.pathExtension
+        let stem = resourceURL.deletingPathExtension().path
+            .replacingOccurrences(of: "/", with: "__")
+            .replacingOccurrences(of: "\\", with: "__")
+        let filename = ext.isEmpty ? sanitizedFilename(stem) : "\(sanitizedFilename(stem)).\(ext)"
+        return try audioCacheDirectory(for: bookID).appendingPathComponent(filename, isDirectory: false)
+    }
+
+    nonisolated static func bookFileURL(named filename: String) throws -> URL {
+        try documentsDirectory().appendingPathComponent(sanitizedFilename(filename), isDirectory: false)
     }
 
     nonisolated static func sanitizedFilename(_ filename: String) -> String {
