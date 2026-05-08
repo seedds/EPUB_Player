@@ -40,7 +40,7 @@ final class Book {
     var mediaOverlayActiveClass: String?
     var mediaOverlayDuration: Double?
     var mediaOverlayClipCount: Int?
-    var mediaOverlayPreparationStateRawValue: String
+    var mediaOverlayPreparationStateRawValue: String?
     var mediaOverlayPreparationError: String?
     var sourceFileSize: Int64?
     var sourceFileModifiedAt: Date?
@@ -65,7 +65,7 @@ final class Book {
         mediaOverlayActiveClass: String? = nil,
         mediaOverlayDuration: Double? = nil,
         mediaOverlayClipCount: Int? = nil,
-        mediaOverlayPreparationStateRawValue: String = MediaOverlayPreparationState.pending.rawValue,
+        mediaOverlayPreparationStateRawValue: String? = MediaOverlayPreparationState.pending.rawValue,
         mediaOverlayPreparationError: String? = nil,
         sourceFileSize: Int64? = nil,
         sourceFileModifiedAt: Date? = nil,
@@ -101,7 +101,10 @@ final class Book {
 extension Book {
     var mediaOverlayPreparationState: MediaOverlayPreparationState {
         get {
-            MediaOverlayPreparationState(rawValue: mediaOverlayPreparationStateRawValue) ?? .pending
+            guard let mediaOverlayPreparationStateRawValue else {
+                return .pending
+            }
+            return MediaOverlayPreparationState(rawValue: mediaOverlayPreparationStateRawValue) ?? .pending
         }
         set {
             mediaOverlayPreparationStateRawValue = newValue.rawValue

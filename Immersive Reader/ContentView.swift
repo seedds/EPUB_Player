@@ -41,7 +41,7 @@ struct ContentView: View {
             }
             hasResumedPendingMediaOverlayPreparation = true
             if (try? await BookLibraryResetService.resetForEPUBOnlyImportIfNeeded(modelContext: modelContext)) == true {
-                try? await BookImportService.refreshBooksFromDocuments(modelContext: modelContext)
+                _ = try? await BookImportService.refreshBooksFromDocuments(modelContext: modelContext)
             }
             MediaOverlayPreparationCoordinator.shared.resumePendingBooks(modelContext: modelContext)
         }
