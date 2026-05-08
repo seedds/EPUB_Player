@@ -118,8 +118,8 @@ extension Book {
 
         return NormalizedBookStoragePaths(
             epubFilePath: normalizedEPUBPath,
-            coverImagePath: normalizedCachedAssetPath(for: coverImagePath),
-            mediaOverlayJSONPath: normalizedCachedAssetPath(for: mediaOverlayJSONPath)
+            coverImagePath: coverImagePath,
+            mediaOverlayJSONPath: mediaOverlayJSONPath
         )
     }
 
@@ -131,11 +131,6 @@ extension Book {
         guard let storedPath = normalizedStoragePaths.coverImagePath else {
             return nil
         }
-
-        if storedPath.hasPrefix("/") {
-            return URL(fileURLWithPath: storedPath)
-        }
-
         return try AppStorage.coversDirectory().appendingPathComponent(storedPath, isDirectory: false)
     }
 
@@ -143,30 +138,6 @@ extension Book {
         guard let storedPath = normalizedStoragePaths.mediaOverlayJSONPath else {
             return nil
         }
-
-        if storedPath.hasPrefix("/") {
-            return URL(fileURLWithPath: storedPath)
-        }
-
         return try AppStorage.mediaOverlaysDirectory().appendingPathComponent(storedPath, isDirectory: false)
-    }
-
-    nonisolated private func normalizedCachedAssetPath(for path: String?) -> String? {
-        guard let path, !path.isEmpty else {
-            return nil
-        }
-
-        if path.hasPrefix("/") {
-            if let coversDirectory = try? AppStorage.coversDirectory(),
-               let relativePath = AppStorage.relativePath(from: path, under: coversDirectory.path) {
-                return relativePath
-            }
-            if let overlaysDirectory = try? AppStorage.mediaOverlaysDirectory(),
-               let relativePath = AppStorage.relativePath(from: path, under: overlaysDirectory.path) {
-                return relativePath
-            }
-        }
-
-        return path
     }
 }

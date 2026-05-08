@@ -308,10 +308,6 @@ final class MediaOverlayPlaybackController: ObservableObject {
     }
 
     private func resolvedAudioFileURL(for audioPath: String) async throws -> URL {
-        if audioPath.hasPrefix("/") {
-            return URL(fileURLWithPath: audioPath)
-        }
-
         guard let currentBookID, let currentEPUBURL else {
             throw BookAssetCacheError.missingArchiveEntry(audioPath)
         }

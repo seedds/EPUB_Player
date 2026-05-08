@@ -708,10 +708,6 @@ enum BookAssetCacheService {
         bookID: UUID,
         epubURL: URL
     ) throws -> URL {
-        if resourcePath.hasPrefix("/") {
-            return URL(fileURLWithPath: resourcePath)
-        }
-
         let destinationURL = try AppStorage.audioCacheFileURL(for: bookID, resourcePath: resourcePath)
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             return destinationURL
@@ -725,45 +721,6 @@ enum BookAssetCacheService {
         try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: destinationURL, options: .atomic)
         return destinationURL
-    }
-}
-
-@MainActor
-enum BookLibraryResetService {
-    private static let didResetForEPUBOnlyImportKey = "didResetLibraryForEPUBOnlyImportV1"
-
-    static func resetForEPUBOnlyImportIfNeeded(modelContext: ModelContext) async throws -> Bool {
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: didResetForEPUBOnlyImportKey) else {
-            return false
-        }
-
-        let books = try modelContext.fetch(FetchDescriptor<Book>())
-        for book in books {
-            modelContext.delete(book)
-        }
-        try modelContext.save()
-
-        try await Task.detached(priority: .utility) {
-            try removeGeneratedLibraryAssets()
-        }.value
-
-        defaults.set(true, forKey: didResetForEPUBOnlyImportKey)
-        return true
-    }
-
-    nonisolated private static func removeGeneratedLibraryAssets() throws {
-        let fileManager = FileManager.default
-        let generatedDirectories = [
-            try? AppStorage.coversDirectory(),
-            try? AppStorage.mediaOverlaysDirectory(),
-            try? AppStorage.audioCacheDirectory(),
-            try? AppStorage.applicationSupportDirectory().appendingPathComponent("Extracted", isDirectory: true),
-        ]
-
-        for directory in generatedDirectories.compactMap({ $0 }) {
-            try? fileManager.removeItem(at: directory)
-        }
     }
 }
 

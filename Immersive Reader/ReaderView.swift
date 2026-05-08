@@ -188,7 +188,7 @@ struct ReaderView: View {
         .onChange(of: readerPlaybackJumpInterval) { _, newValue in
             playback.setJumpInterval(newValue)
         }
-        .onChange(of: book.mediaOverlayPreparationStateRawValue) { _, _ in
+        .onChange(of: book.mediaOverlayPreparationState) { _, _ in
             Task {
                 await loadMediaOverlaysIfAvailable()
             }
