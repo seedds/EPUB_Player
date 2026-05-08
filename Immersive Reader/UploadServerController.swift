@@ -211,9 +211,9 @@ final class UploadServerController: ObservableObject {
                 }
             }
         }
-        server.onError = { [weak self] message in
+        server.onError = { [weak self, weak server] message in
             Task { @MainActor in
-                self?.status = .failed(message)
+                self?.handleServerFailure(message, from: server)
             }
         }
 
@@ -405,6 +405,16 @@ final class UploadServerController: ObservableObject {
 
     private func removeActiveUpload(id: UUID) {
         activeUploads.removeAll { $0.id == id }
+    }
+
+    private func handleServerFailure(_ message: String, from failedServer: LocalUploadServer?) {
+        if let failedServer, let server, server !== failedServer {
+            return
+        }
+
+        server = nil
+        activeUploads = []
+        status = .failed(message)
     }
 
     private func booksJSON(modelContext: ModelContext) throws -> Data {

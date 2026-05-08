@@ -68,9 +68,13 @@ final class LocalUploadServer {
             let configuredPort = port
             let listener = try NWListener(using: parameters, on: nwPort)
             listener.stateUpdateHandler = { [weak self] state in
-                if case .failed(let error) = state {
+                switch state {
+                case .waiting(let error), .failed(let error):
                     self?.onError?(Self.startupError(from: error, port: configuredPort).localizedDescription)
                     self?.stop()
+
+                default:
+                    break
                 }
             }
             listener.newConnectionHandler = { [weak self] connection in
