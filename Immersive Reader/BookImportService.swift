@@ -765,14 +765,16 @@ enum BookAssetCacheService {
         try removeOverlayArtifacts(for: bookID)
     }
 
-    nonisolated static func hasCachedCover(for book: Book) -> Bool {
+    @MainActor
+    static func hasCachedCover(for book: Book) -> Bool {
         guard let coverURL = try? book.resolvedCoverImageURL() else {
             return false
         }
         return FileManager.default.fileExists(atPath: coverURL.path)
     }
 
-    nonisolated static func hasValidOverlayCache(for book: Book) -> Bool {
+    @MainActor
+    static func hasValidOverlayCache(for book: Book) -> Bool {
         guard let overlayURL = try? book.resolvedMediaOverlayJSONURL() else {
             return false
         }
