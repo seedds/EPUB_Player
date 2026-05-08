@@ -10,11 +10,14 @@ import SwiftData
 
 enum BookImportError: LocalizedError {
     case notEpub(String)
+    case libraryFilesUnavailable
 
     var errorDescription: String? {
         switch self {
         case .notEpub(let filename):
             "Only EPUB files are supported. \(filename) is not an EPUB."
+        case .libraryFilesUnavailable:
+            "Could not verify the imported EPUB files. Your library was left unchanged."
         }
     }
 }
@@ -133,27 +136,26 @@ enum BookImportService {
             using: progressHandler
         )
 
-        let libraryDirectory = try AppStorage.documentsDirectory()
-        let epubURLs = try FileManager.default.contentsOfDirectory(
-            at: libraryDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        )
-        .filter { $0.pathExtension.lowercased() == "epub" }
-        .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
-
         let existingBooks = try modelContext.fetch(FetchDescriptor<Book>())
-        let existingBooksByFilename = Dictionary(uniqueKeysWithValues: existingBooks.map { ($0.originalFilename, $0) })
         let fileManager = FileManager.default
-        let filenamesOnDisk = Set(epubURLs.map { AppStorage.sanitizedFilename($0.lastPathComponent) })
-        let removedBooks = existingBooks.filter { !filenamesOnDisk.contains($0.originalFilename) }
+        let epubURLs = try await refreshSourceEPUBURLs(
+            existingBooks: existingBooks,
+            fileManager: fileManager,
+            progressHandler: progressHandler
+        )
+
+        let existingBooksByFilename = Dictionary(uniqueKeysWithValues: existingBooks.map { ($0.originalFilename, $0) })
+        let removedBooks = existingBooks.filter { book in
+            guard let epubURL = try? book.resolvedEPUBFileURL() else {
+                return true
+            }
+
+            return !fileManager.fileExists(atPath: epubURL.path)
+        }
         let totalOperations = max(removedBooks.count + epubURLs.count, 1)
         var completedOperations = 0
 
         for book in removedBooks {
-            if let epubURL = try? book.resolvedEPUBFileURL() {
-                try? fileManager.removeItem(at: epubURL)
-            }
             try? BookAssetCacheService.removeAllCachedAssets(for: book.id)
             modelContext.delete(book)
 
@@ -559,6 +561,70 @@ enum BookImportService {
         )
     }
 
+    @MainActor
+    static func restoreMissingCovers(modelContext: ModelContext) async {
+        let descriptor = FetchDescriptor<Book>()
+        guard let books = try? modelContext.fetch(descriptor) else {
+            return
+        }
+
+        var didUpdateLibrary = false
+        for book in books {
+            guard !BookAssetCacheService.hasCachedCover(for: book),
+                  let sourceURL = try? book.resolvedEPUBFileURL(),
+                  FileManager.default.fileExists(atPath: sourceURL.path)
+            else {
+                continue
+            }
+
+            let cachedCoverPath = try? await Task.detached(priority: .utility) {
+                try regenerateCoverImage(from: sourceURL, bookID: book.id)
+            }.value
+
+            guard let cachedCoverPath else {
+                continue
+            }
+
+            if book.coverImagePath != cachedCoverPath {
+                book.coverImagePath = cachedCoverPath
+                didUpdateLibrary = true
+            }
+        }
+
+        if didUpdateLibrary {
+            try? modelContext.save()
+        }
+    }
+
+    @MainActor
+    private static func refreshSourceEPUBURLs(
+        existingBooks: [Book],
+        fileManager: FileManager,
+        progressHandler: (@MainActor @Sendable (RefreshProgress) -> Void)?
+    ) async throws -> [URL] {
+        do {
+            let scannedEPUBURLs = try scannedLibraryEPUBURLs(fileManager: fileManager)
+            if !scannedEPUBURLs.isEmpty || existingBooks.isEmpty {
+                return scannedEPUBURLs
+            }
+        } catch {
+            guard !existingBooks.isEmpty else {
+                throw error
+            }
+        }
+
+        let fallbackEPUBURLs = existingLibraryEPUBURLs(for: existingBooks, fileManager: fileManager)
+        guard !fallbackEPUBURLs.isEmpty else {
+            throw BookImportError.libraryFilesUnavailable
+        }
+
+        await reportRefreshProgress(
+            RefreshProgress(fractionCompleted: 0.05, message: "Rebuilding library from saved book paths..."),
+            using: progressHandler
+        )
+        return fallbackEPUBURLs
+    }
+
     nonisolated private static func reportImportProgress(
         _ progress: ImportProgress,
         using progressHandler: (@MainActor @Sendable (ImportProgress) -> Void)?
@@ -617,6 +683,31 @@ enum BookImportService {
             fileSize: fileSize,
             modifiedAt: resourceValues.contentModificationDate
         )
+    }
+
+    nonisolated private static func scannedLibraryEPUBURLs(fileManager: FileManager) throws -> [URL] {
+        let libraryDirectory = try AppStorage.documentsDirectory()
+        return try fileManager.contentsOfDirectory(
+            at: libraryDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )
+        .filter { $0.pathExtension.lowercased() == "epub" }
+        .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+    }
+
+    @MainActor
+    private static func existingLibraryEPUBURLs(for books: [Book], fileManager: FileManager) -> [URL] {
+        books.compactMap { book in
+            guard let epubURL = try? book.resolvedEPUBFileURL(),
+                  fileManager.fileExists(atPath: epubURL.path)
+            else {
+                return nil
+            }
+
+            return epubURL
+        }
+        .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
     }
 
     @MainActor

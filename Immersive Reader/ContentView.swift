@@ -13,6 +13,7 @@ import ReadiumShared
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var uploadServer = UploadServerController()
     @SwiftUI.AppStorage(ReaderSettings.themeKey) private var themeRawValue = AppThemeOption.system.rawValue
     @State private var hasResumedPendingMediaOverlayPreparation = false
@@ -41,6 +42,13 @@ struct ContentView: View {
             }
             hasResumedPendingMediaOverlayPreparation = true
             MediaOverlayPreparationCoordinator.shared.resumePendingBooks(modelContext: modelContext)
+        }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else {
+                return
+            }
+
+            await BookImportService.restoreMissingCovers(modelContext: modelContext)
         }
     }
 }
