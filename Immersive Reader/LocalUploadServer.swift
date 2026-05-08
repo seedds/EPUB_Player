@@ -258,12 +258,12 @@ private final class HTTPUploadConnection {
         let target = requestParts[1]
         let headers = parseHeaders(lines.dropFirst())
 
-        if method == "GET", target == "/" {
+        if method == "GET" || method == "HEAD", target == "/" {
             finishWithHTML(uploadPageHTML)
             return
         }
 
-        if method == "GET", target == "/api/books" {
+        if method == "GET" || method == "HEAD", target == "/api/books" {
             requestBooks()
             return
         }
@@ -278,13 +278,13 @@ private final class HTTPUploadConnection {
             return
         }
 
-        guard method == "POST" else {
-            finishWithHTTP(status: 405, body: "Method Not Allowed")
+        guard target.hasPrefix("/upload") else {
+            finishWithHTTP(status: 404, body: "Not Found")
             return
         }
 
-        guard target.hasPrefix("/upload") else {
-            finishWithHTTP(status: 404, body: "Not Found")
+        guard method == "POST" else {
+            finishWithHTTP(status: 405, body: "Method Not Allowed")
             return
         }
 
