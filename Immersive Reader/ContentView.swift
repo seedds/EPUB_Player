@@ -489,7 +489,7 @@ private struct UploadView: View {
                 }
 
                 Section("Storage") {
-                    Text("Uploaded EPUBs are stored directly in the app's Documents folder and should appear in Files under On My iPhone/ImmersiveReader. Uploaded .ttf and .otf files are imported into Reader > Custom Fonts.")
+                    Text("The server accepts .epub, .ttf, and .otf files. EPUBs are stored directly in the app's Documents folder and should appear in Files under On My iPhone/ImmersiveReader. Font files are imported into Reader > Custom Fonts.")
                 }
 
                 if !controller.activeUploads.isEmpty {
