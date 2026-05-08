@@ -32,13 +32,15 @@ struct ReaderView: View {
     @State private var playbackBarFrame: CGRect = .zero
     @State private var lastHandledPlaybackStartClipKey: String?
     @State private var pendingChapterEntryPlaybackStartClipKey: String?
+    @State private var openingStatusMessage = "Opening EPUB..."
+    @State private var openingSecondaryMessage: String?
+    @State private var openingProgress: Double?
 
     var body: some View {
         Group {
             switch state {
             case .loading:
-                ProgressView("Opening EPUB...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                loadingView
 
             case .ready(_, let navigator):
                 readyReaderView(for: navigator)
@@ -91,6 +93,21 @@ struct ReaderView: View {
         store.persistNow()
         playback.setPlaybackRate(store.playbackSpeed)
         playback.setJumpInterval(store.playbackJumpInterval)
+
+        if shouldWaitForMediaOverlayPreparationBeforeOpening {
+            openingStatusMessage = "Preparing read-aloud..."
+            openingSecondaryMessage = "Checking media overlays..."
+            openingProgress = 0
+            await MediaOverlayPreparationCoordinator.shared.ensurePreparedForPlayback(bookID: book.id, store: store) { progress in
+                openingStatusMessage = "Preparing read-aloud..."
+                openingSecondaryMessage = progress.message
+                openingProgress = progress.fractionCompleted
+            }
+        }
+
+        openingStatusMessage = "Opening EPUB..."
+        openingSecondaryMessage = nil
+        openingProgress = nil
         await loadMediaOverlaysIfAvailable()
         customFontFamilies = CustomFontStore.allFamilies(store: store)
 
@@ -116,6 +133,55 @@ struct ReaderView: View {
             await restoreLastPlayedClipSelectionIfAvailable(with: navigator)
         } catch {
             state = .failed(error.localizedDescription)
+        }
+    }
+
+    @ViewBuilder
+    private var loadingView: some View {
+        VStack(spacing: 14) {
+            if let openingProgress {
+                ProgressView(value: openingProgress)
+                    .tint(.accentColor)
+
+                Text(openingStatusMessage)
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+
+                if let openingSecondaryMessage, !openingSecondaryMessage.isEmpty {
+                    Text(openingSecondaryMessage)
+                        .font(.subheadline)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("\(Int((openingProgress * 100).rounded()))%")
+                    .font(.subheadline)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            } else {
+                ProgressView(openingStatusMessage)
+
+                if let openingSecondaryMessage, !openingSecondaryMessage.isEmpty {
+                    Text(openingSecondaryMessage)
+                        .font(.subheadline)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: 320)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var shouldWaitForMediaOverlayPreparationBeforeOpening: Bool {
+        switch book.mediaOverlayPreparationState {
+        case .failed:
+            return false
+        case .pending, .processing:
+            return true
+        case .ready:
+            return !BookAssetCacheService.hasValidOverlayCache(for: book)
         }
     }
 

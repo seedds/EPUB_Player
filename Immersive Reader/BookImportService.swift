@@ -804,9 +804,16 @@ enum BookAssetCacheService {
 
 @MainActor
 final class MediaOverlayPreparationCoordinator {
+    struct PreparationProgress: Sendable {
+        let fractionCompleted: Double
+        let message: String
+    }
+
     static let shared = MediaOverlayPreparationCoordinator()
 
     private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var progressSnapshots: [UUID: PreparationProgress] = [:]
+    private var progressObservers: [UUID: [UUID: (@MainActor @Sendable (PreparationProgress) -> Void)]] = [:]
 
     private init() {}
 
@@ -853,6 +860,10 @@ final class MediaOverlayPreparationCoordinator {
 
         book.mediaOverlayPreparationState = .processing
         book.mediaOverlayPreparationError = nil
+        publishProgress(
+            PreparationProgress(fractionCompleted: 0, message: "Preparing read-aloud..."),
+            for: bookID
+        )
         store.persistNow()
 
         tasks[bookID] = Task { @MainActor [weak self] in
@@ -866,8 +877,17 @@ final class MediaOverlayPreparationCoordinator {
             }
 
             do {
+                let progressHandler: @Sendable (EPUBMediaOverlayProgress) -> Void = { [weak self] progress in
+                    DispatchQueue.main.async {
+                        self?.publishProgress(Self.preparationProgress(from: progress), for: bookID)
+                    }
+                }
                 let result = try await Task.detached(priority: priority) {
-                    try EPUBMediaOverlayService.parseAndWrite(at: sourceURL, bookID: bookID)
+                    try EPUBMediaOverlayService.parseAndWrite(
+                        at: sourceURL,
+                        bookID: bookID,
+                        progressHandler: progressHandler
+                    )
                 }.value
 
                 guard let updatedBook = self?.fetchBook(id: bookID, store: store) else {
@@ -880,6 +900,10 @@ final class MediaOverlayPreparationCoordinator {
                 updatedBook.mediaOverlayClipCount = result?.manifest.clipCount
                 updatedBook.mediaOverlayPreparationState = .ready
                 updatedBook.mediaOverlayPreparationError = nil
+                self?.publishProgress(
+                    PreparationProgress(fractionCompleted: 1, message: "Read-aloud ready"),
+                    for: bookID
+                )
                 store.persistNow()
             } catch {
                 guard let updatedBook = self?.fetchBook(id: bookID, store: store) else {
@@ -892,12 +916,27 @@ final class MediaOverlayPreparationCoordinator {
                 updatedBook.mediaOverlayClipCount = nil
                 updatedBook.mediaOverlayPreparationState = .failed
                 updatedBook.mediaOverlayPreparationError = error.localizedDescription
+                self?.publishProgress(
+                    PreparationProgress(fractionCompleted: 1, message: "Read-aloud unavailable"),
+                    for: bookID
+                )
                 store.persistNow()
             }
         }
     }
 
-    func ensurePreparedForPlayback(bookID: UUID, store: AppStateStore) async {
+    func ensurePreparedForPlayback(
+        bookID: UUID,
+        store: AppStateStore,
+        progressHandler: (@MainActor @Sendable (PreparationProgress) -> Void)? = nil
+    ) async {
+        let observerID = progressHandler.map { addProgressObserver(for: bookID, using: $0) }
+        defer {
+            if let observerID {
+                removeProgressObserver(observerID, for: bookID)
+            }
+        }
+
         if let task = tasks[bookID] {
             await task.value
             return
@@ -928,5 +967,51 @@ final class MediaOverlayPreparationCoordinator {
 
     private func fetchBook(id: UUID, store: AppStateStore) -> Book? {
         store.book(withID: id)
+    }
+
+    private func addProgressObserver(
+        for bookID: UUID,
+        using progressHandler: @escaping @MainActor @Sendable (PreparationProgress) -> Void
+    ) -> UUID {
+        let observerID = UUID()
+        if progressObservers[bookID] == nil {
+            progressObservers[bookID] = [:]
+        }
+        progressObservers[bookID]?[observerID] = progressHandler
+
+        if let progress = progressSnapshots[bookID] {
+            progressHandler(progress)
+        }
+
+        return observerID
+    }
+
+    private func removeProgressObserver(_ observerID: UUID, for bookID: UUID) {
+        progressObservers[bookID]?[observerID] = nil
+        if progressObservers[bookID]?.isEmpty == true {
+            progressObservers[bookID] = nil
+        }
+    }
+
+    private func publishProgress(_ progress: PreparationProgress, for bookID: UUID) {
+        progressSnapshots[bookID] = PreparationProgress(
+            fractionCompleted: min(max(progress.fractionCompleted, 0), 1),
+            message: progress.message
+        )
+
+        guard let progress = progressSnapshots[bookID] else {
+            return
+        }
+
+        progressObservers[bookID]?.values.forEach { observer in
+            observer(progress)
+        }
+    }
+
+    private static func preparationProgress(from progress: EPUBMediaOverlayProgress) -> PreparationProgress {
+        PreparationProgress(
+            fractionCompleted: progress.fractionCompleted,
+            message: progress.message
+        )
     }
 }
