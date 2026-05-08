@@ -79,12 +79,14 @@ enum CustomFontStore {
         let style: ImportedFontStyle
     }
 
+    @MainActor
     static func allFamilies(store: AppStateStore) -> [ImportedFontFamily] {
         let families = synchronizedFamilies(store: store)
         registerFontsForUI(in: families)
         return families
     }
 
+    @MainActor
     @discardableResult
     static func importFonts(from urls: [URL], store: AppStateStore) throws -> [ImportedFontFamily] {
         let directory = try AppStorage.customFontsDirectory()
@@ -149,6 +151,7 @@ enum CustomFontStore {
         return snapshot.filter { changedFamilyIDs.contains($0.id) }
     }
 
+    @MainActor
     static func removeFamilies(withIDs ids: some Sequence<UUID>, store: AppStateStore) throws {
         let idsToRemove = Set(ids)
         guard !idsToRemove.isEmpty else {
@@ -167,6 +170,7 @@ enum CustomFontStore {
         synchronizeSelectedFontFamily(with: remainingFamilies, store: store)
     }
 
+    @MainActor
     static func removeFiles(withIDs ids: some Sequence<UUID>, store: AppStateStore) throws {
         let idsToRemove = Set(ids)
         guard !idsToRemove.isEmpty else {
@@ -242,6 +246,7 @@ enum CustomFontStore {
         }
     }
 
+    @MainActor
     private static func synchronizedFamilies(store: AppStateStore) -> [ImportedFontFamily] {
         let loadedFamilies = store.customFontFamilies
         guard let directory = try? AppStorage.customFontsDirectory() else {
@@ -394,6 +399,7 @@ enum CustomFontStore {
         return pathExtension == "ttf" || pathExtension == "otf"
     }
 
+    @MainActor
     private static func synchronizeSelectedFontFamily(with families: [ImportedFontFamily], store: AppStateStore) {
         guard store.fontFamilyRawValue.hasPrefix("custom-font-") else {
             return
