@@ -41,15 +41,17 @@ The app has three tabs:
 
 ## Storage Layout
 
-- Imported EPUB files are stored in the app `Documents` directory
-- Temporary uploads are stored in `tmp/Immersive Reader/Uploads/`
-- Extracted EPUB contents are stored in `Library/Application Support/Immersive Reader/Extracted/<book-id>/`
-- Imported custom fonts are stored in `Library/Application Support/Immersive Reader/CustomFonts/`
-- Custom font metadata is stored in `Library/Application Support/Immersive Reader/custom-fonts.json`
+- Imported EPUB files are stored in `Documents/Books/`
+- Covers are stored in `Documents/Cache/Covers/`
+- Media overlay manifests are stored in `Documents/Cache/MediaOverlays/`
+- Audio cache files are stored in `Documents/Cache/AudioCache/`
+- Upload staging files are stored in `Documents/Cache/Uploads/`
+- Imported custom fonts are stored in `Documents/Cache/Fonts/`
+- App state, settings, and reading progress are stored in `Documents/Cache/state.json`
 
-Imported EPUBs are intended to appear in the Files app under `On My iPhone/ImmersiveReader`.
+Imported EPUBs are intended to appear in the Files app under `On My iPhone/ImmersiveReader/Books`.
 
-Custom fonts are app-managed assets and do not appear in the Files app library view.
+Deleting the app `Documents` folder resets the library, settings, reading progress, custom fonts, and caches.
 
 ## Tech Stack
 

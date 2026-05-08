@@ -7,24 +7,16 @@
 
 import ReadiumNavigator
 import ReadiumShared
-import SwiftData
 import SwiftUI
 import UIKit
 import WebKit
 
 struct ReaderView: View {
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.modelContext) private var modelContext
-    @SwiftUI.AppStorage(ReaderSettings.fontSizeKey) private var readerFontSize = ReaderSettings.defaultFontSize
-    @SwiftUI.AppStorage(ReaderSettings.lineHeightKey) private var readerLineHeight = ReaderSettings.defaultLineHeight
-    @SwiftUI.AppStorage(ReaderSettings.fontFamilyKey) private var readerFontFamilyRawValue = ""
-    @SwiftUI.AppStorage(ReaderSettings.themeKey) private var readerThemeRawValue = AppThemeOption.system.rawValue
-    @SwiftUI.AppStorage(ReaderSettings.readAloudColorKey) private var readerReadAloudColorRawValue = ReaderSettings.defaultReadAloudColorHex
-    @SwiftUI.AppStorage(ReaderSettings.playbackSpeedKey) private var readerPlaybackSpeed = ReaderSettings.defaultPlaybackSpeed
-    @SwiftUI.AppStorage(ReaderSettings.playbackJumpIntervalKey) private var readerPlaybackJumpInterval = ReaderSettings.defaultPlaybackJumpInterval
+    @EnvironmentObject private var store: AppStateStore
     @StateObject private var playback = MediaOverlayPlaybackController()
 
-    let book: Book
+    @ObservedObject var book: Book
 
     @State private var state: ReaderState = .loading
     @State private var chapterItems: [ChapterListItem] = []
@@ -96,11 +88,11 @@ struct ReaderView: View {
         }
 
         book.lastOpenedAt = Date()
-        try? modelContext.save()
-        playback.setPlaybackRate(readerPlaybackSpeed)
-        playback.setJumpInterval(readerPlaybackJumpInterval)
+        store.persistNow()
+        playback.setPlaybackRate(store.playbackSpeed)
+        playback.setJumpInterval(store.playbackJumpInterval)
         await loadMediaOverlaysIfAvailable()
-        customFontFamilies = CustomFontStore.allFamilies()
+        customFontFamilies = CustomFontStore.allFamilies(store: store)
 
         do {
             let publication = try await ReadiumBookService.shared.openPublication(for: book)
@@ -129,12 +121,12 @@ struct ReaderView: View {
 
     private func readerPreferences() -> EPUBPreferences {
         EPUBPreferences(
-            fontFamily: ReaderSettings.fontFamily(from: readerFontFamilyRawValue),
-            fontSize: ReaderSettings.normalizedFontSize(readerFontSize),
-            lineHeight: ReaderSettings.normalizedLineHeight(readerLineHeight),
+            fontFamily: ReaderSettings.fontFamily(from: store.fontFamilyRawValue),
+            fontSize: ReaderSettings.normalizedFontSize(store.fontSize),
+            lineHeight: ReaderSettings.normalizedLineHeight(store.lineHeight),
             publisherStyles: false,
             scroll: true,
-            theme: ReaderSettings.appTheme(from: readerThemeRawValue).readiumTheme(for: colorScheme)
+            theme: ReaderSettings.appTheme(from: store.themeRawValue).readiumTheme(for: colorScheme)
         )
     }
 
@@ -161,31 +153,31 @@ struct ReaderView: View {
                 await handleClipPlaybackStartIfNeeded(with: navigator)
             }
         }
-        .onChange(of: readerFontSize) { _, _ in
+        .onChange(of: store.fontSize) { _, _ in
             Task {
                 await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
             }
         }
-        .onChange(of: readerLineHeight) { _, _ in
+        .onChange(of: store.lineHeight) { _, _ in
             Task {
                 await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
             }
         }
-        .onChange(of: readerFontFamilyRawValue) { _, _ in
+        .onChange(of: store.fontFamilyRawValue) { _, _ in
             Task {
                 await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
             }
         }
-        .onChange(of: readerThemeRawValue) { _, _ in
+        .onChange(of: store.themeRawValue) { _, _ in
             applyReaderPreferences(to: navigator)
         }
-        .onChange(of: readerReadAloudColorRawValue) { _, _ in
+        .onChange(of: store.readAloudColorRawValue) { _, _ in
             applyCurrentClipDecoration(with: navigator)
         }
-        .onChange(of: readerPlaybackSpeed) { _, newValue in
+        .onChange(of: store.playbackSpeed) { _, newValue in
             playback.setPlaybackRate(newValue)
         }
-        .onChange(of: readerPlaybackJumpInterval) { _, newValue in
+        .onChange(of: store.playbackJumpInterval) { _, newValue in
             playback.setJumpInterval(newValue)
         }
         .onChange(of: book.mediaOverlayPreparationState) { _, _ in
@@ -199,7 +191,7 @@ struct ReaderView: View {
             }
         }
         .onChange(of: colorScheme) { _, _ in
-            if ReaderSettings.appTheme(from: readerThemeRawValue) == .system {
+            if ReaderSettings.appTheme(from: store.themeRawValue) == .system {
                 applyReaderPreferences(to: navigator)
             }
         }
@@ -245,11 +237,23 @@ struct ReaderView: View {
         if !playback.clips.isEmpty {
             MediaOverlayPlaybackBar(
                 playback: playback,
-                playbackSpeed: $readerPlaybackSpeed,
-                playbackJumpInterval: readerPlaybackJumpInterval,
-                fontSize: $readerFontSize,
-                lineHeight: $readerLineHeight,
-                fontFamilyRawValue: $readerFontFamilyRawValue,
+                playbackSpeed: Binding(
+                    get: { store.playbackSpeed },
+                    set: { store.playbackSpeed = $0 }
+                ),
+                playbackJumpInterval: store.playbackJumpInterval,
+                fontSize: Binding(
+                    get: { store.fontSize },
+                    set: { store.fontSize = $0 }
+                ),
+                lineHeight: Binding(
+                    get: { store.lineHeight },
+                    set: { store.lineHeight = $0 }
+                ),
+                fontFamilyRawValue: Binding(
+                    get: { store.fontFamilyRawValue },
+                    set: { store.fontFamilyRawValue = $0 }
+                ),
                 customFontFamilies: customFontFamilies,
                 isSpeedControlPresented: $isPlaybackSpeedControlPresented,
                 isReaderSettingsControlPresented: $isReaderSettingsControlPresented,
@@ -269,7 +273,7 @@ struct ReaderView: View {
                 previous: {
                     Task {
                         await playback.jump(
-                            by: -ReaderSettings.normalizedPlaybackJumpInterval(readerPlaybackJumpInterval),
+                            by: -ReaderSettings.normalizedPlaybackJumpInterval(store.playbackJumpInterval),
                             reason: "playbackBar.previousButton"
                         )
                     }
@@ -277,7 +281,7 @@ struct ReaderView: View {
                 next: {
                     Task {
                         await playback.jump(
-                            by: ReaderSettings.normalizedPlaybackJumpInterval(readerPlaybackJumpInterval),
+                            by: ReaderSettings.normalizedPlaybackJumpInterval(store.playbackJumpInterval),
                             reason: "playbackBar.nextButton"
                         )
                     }
@@ -345,7 +349,7 @@ struct ReaderView: View {
     }
 
     private func fontFamilyDeclarations() -> [AnyHTMLFontFamilyDeclaration] {
-        bundledFontFamilyDeclarations() + CustomFontStore.fontFamilyDeclarations()
+        bundledFontFamilyDeclarations() + CustomFontStore.fontFamilyDeclarations(customFontFamilies: customFontFamilies)
     }
 
     private func bundledFontFamilyDeclarations() -> [AnyHTMLFontFamilyDeclaration] {
@@ -482,7 +486,7 @@ struct ReaderView: View {
     private func saveLocation(_ locator: Locator) {
         book.lastLocatorJSON = locator.jsonString
         book.lastOpenedAt = Date()
-        try? modelContext.save()
+        store.persistNow()
     }
 
     @MainActor
@@ -492,7 +496,7 @@ struct ReaderView: View {
             book.lastPlayedFragmentID = nil
             book.lastPlayedClipBegin = nil
             book.lastPlayedClipEnd = nil
-            try? modelContext.save()
+            store.persistNow()
             return
         }
 
@@ -500,7 +504,7 @@ struct ReaderView: View {
         book.lastPlayedFragmentID = clip.fragmentID
         book.lastPlayedClipBegin = clip.clipBegin
         book.lastPlayedClipEnd = clip.clipEnd
-        try? modelContext.save()
+        store.persistNow()
     }
 
     @MainActor
@@ -1342,7 +1346,7 @@ struct ReaderView: View {
                     id: "media-overlay-active",
                     locator: locator,
                     style: .highlight(
-                        tint: ReaderSettings.uiColor(from: readerReadAloudColorRawValue),
+                        tint: ReaderSettings.uiColor(from: store.readAloudColorRawValue),
                         isActive: true
                     )
                 ),

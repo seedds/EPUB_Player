@@ -8,7 +8,6 @@
 import Foundation
 import Darwin
 import Combine
-import SwiftData
 
 enum LocalLibraryError: LocalizedError {
     case bookNotFound
@@ -130,7 +129,7 @@ final class UploadServerController: ObservableObject {
     private var pendingImports: [PendingImport] = []
     private var importTask: Task<Void, Never>?
 
-    init(port: UInt16 = ReaderSettings.storedUploadServerPort()) {
+    init(port: UInt16 = ReaderSettings.uploadServerPort(from: ReaderSettings.defaultUploadServerPort)) {
         self.port = port
     }
 
@@ -141,7 +140,7 @@ final class UploadServerController: ObservableObject {
         return URL(string: "http://\(ipAddress):\(port)")
     }
 
-    func start(modelContext: ModelContext) {
+    func start(store: AppStateStore) {
         guard server == nil else { return }
 
         let server = LocalUploadServer(port: port)
@@ -170,7 +169,7 @@ final class UploadServerController: ObservableObject {
                         source: .upload(uploadID),
                         existingBookStrategy: .skip
                     )],
-                    modelContext: modelContext
+                    store: store
                 )
             }
         }
@@ -183,7 +182,7 @@ final class UploadServerController: ObservableObject {
             Task { @MainActor in
                 do {
                     guard let self else { throw LocalLibraryError.bookNotFound }
-                    completion(.success(try self.booksJSON(modelContext: modelContext)))
+                    completion(.success(try self.booksJSON(store: store)))
                 } catch {
                     completion(.failure(error))
                 }
@@ -193,8 +192,8 @@ final class UploadServerController: ObservableObject {
             Task { @MainActor in
                 do {
                     guard let self else { throw LocalLibraryError.bookNotFound }
-                    try self.renameBook(id: bookId, to: filename, modelContext: modelContext)
-                    completion(.success(try self.booksJSON(modelContext: modelContext)))
+                    try self.renameBook(id: bookId, to: filename, store: store)
+                    completion(.success(try self.booksJSON(store: store)))
                 } catch {
                     completion(.failure(error))
                 }
@@ -204,8 +203,8 @@ final class UploadServerController: ObservableObject {
             Task { @MainActor in
                 do {
                     guard let self else { throw LocalLibraryError.bookNotFound }
-                    try self.deleteBook(id: bookId, modelContext: modelContext)
-                    completion(.success(try self.booksJSON(modelContext: modelContext)))
+                    try self.deleteBook(id: bookId, store: store)
+                    completion(.success(try self.booksJSON(store: store)))
                 } catch {
                     completion(.failure(error))
                 }
@@ -233,7 +232,7 @@ final class UploadServerController: ObservableObject {
         status = .stopped
     }
 
-    func importBooks(from urls: [URL], modelContext: ModelContext) {
+    func importBooks(from urls: [URL], store: AppStateStore) {
         let imports = urls.map {
             PendingImport(
                 sourceURL: $0,
@@ -245,7 +244,7 @@ final class UploadServerController: ObservableObject {
         }
 
         manualImportErrorMessage = nil
-        enqueueImports(imports, modelContext: modelContext)
+        enqueueImports(imports, store: store)
     }
 
     func clearManualImportError() {
@@ -259,7 +258,7 @@ final class UploadServerController: ObservableObject {
         return "File \(min(completedImportCount + 1, totalImportCount)) of \(totalImportCount)"
     }
 
-    private func enqueueImports(_ imports: [PendingImport], modelContext: ModelContext) {
+    private func enqueueImports(_ imports: [PendingImport], store: AppStateStore) {
         guard !imports.isEmpty else {
             return
         }
@@ -274,20 +273,20 @@ final class UploadServerController: ObservableObject {
 
         pendingImports.append(contentsOf: imports)
         totalImportCount += imports.count
-        startImportProcessing(modelContext: modelContext)
+        startImportProcessing(store: store)
     }
 
-    private func startImportProcessing(modelContext: ModelContext) {
+    private func startImportProcessing(store: AppStateStore) {
         guard importTask == nil else {
             return
         }
 
         importTask = Task { @MainActor [weak self] in
-            await self?.processPendingImports(modelContext: modelContext)
+            await self?.processPendingImports(store: store)
         }
     }
 
-    private func processPendingImports(modelContext: ModelContext) async {
+    private func processPendingImports(store: AppStateStore) async {
         defer {
             importTask = nil
             isImportingBooks = false
@@ -310,7 +309,7 @@ final class UploadServerController: ObservableObject {
                 case .book:
                     _ = try await BookImportService.importBook(
                         from: pendingImport.sourceURL,
-                        modelContext: modelContext,
+                        store: store,
                         existingBookStrategy: pendingImport.existingBookStrategy
                     ) { [weak self] progress in
                         guard let self else { return }
@@ -320,7 +319,7 @@ final class UploadServerController: ObservableObject {
 
                 case .customFont:
                     importStatus = "Importing font..."
-                    _ = try CustomFontStore.importFonts(from: [pendingImport.sourceURL])
+                    _ = try CustomFontStore.importFonts(from: [pendingImport.sourceURL], store: store)
                     importProgress = overallImportProgress(for: 1)
                     importStatus = "Import complete"
                 }
@@ -417,11 +416,8 @@ final class UploadServerController: ObservableObject {
         status = .failed(message)
     }
 
-    private func booksJSON(modelContext: ModelContext) throws -> Data {
-        let descriptor = FetchDescriptor<Book>(
-            sortBy: [SortDescriptor(\Book.importedAt, order: .reverse)]
-        )
-        let books = try modelContext.fetch(descriptor)
+    private func booksJSON(store: AppStateStore) throws -> Data {
+        let books = store.books
         let fileManager = FileManager.default
         let dateFormatter = ISO8601DateFormatter()
 
@@ -445,15 +441,15 @@ final class UploadServerController: ObservableObject {
         return try JSONSerialization.data(withJSONObject: ["books": payload], options: [])
     }
 
-    private func renameBook(id: UUID, to requestedFilename: String, modelContext: ModelContext) throws {
-        let book = try findBook(id: id, modelContext: modelContext)
+    private func renameBook(id: UUID, to requestedFilename: String, store: AppStateStore) throws {
+        let book = try findBook(id: id, store: store)
         let filename = epubFilename(from: requestedFilename)
         guard !filename.isEmpty else {
             throw LocalLibraryError.invalidFilename
         }
 
         let fileManager = FileManager.default
-        let libraryDirectory = try AppStorage.documentsDirectory()
+        let libraryDirectory = try AppStorage.booksDirectory()
         let destinationURL = libraryDirectory.appendingPathComponent(filename, isDirectory: false)
         let sourceURL = try book.resolvedEPUBFileURL()
 
@@ -471,22 +467,22 @@ final class UploadServerController: ObservableObject {
             book.title = displayTitle(for: filename)
         }
         book.epubFilePath = AppStorage.storedBookPath(for: filename)
-        try modelContext.save()
+        store.sortBooksByImportedAt()
+        store.persistNow()
     }
 
-    private func deleteBook(id: UUID, modelContext: ModelContext) throws {
-        let book = try findBook(id: id, modelContext: modelContext)
+    private func deleteBook(id: UUID, store: AppStateStore) throws {
+        let book = try findBook(id: id, store: store)
         if let epubURL = try? book.resolvedEPUBFileURL() {
             try? FileManager.default.removeItem(at: epubURL)
         }
         try? BookAssetCacheService.removeAllCachedAssets(for: book.id)
-        modelContext.delete(book)
-        try modelContext.save()
+        store.removeBook(id: book.id)
+        store.persistNow()
     }
 
-    private func findBook(id: UUID, modelContext: ModelContext) throws -> Book {
-        let descriptor = FetchDescriptor<Book>()
-        guard let book = try modelContext.fetch(descriptor).first(where: { $0.id == id }) else {
+    private func findBook(id: UUID, store: AppStateStore) throws -> Book {
+        guard let book = store.book(withID: id) else {
             throw LocalLibraryError.bookNotFound
         }
         return book

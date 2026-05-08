@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import SwiftData
 
 enum BookImportError: LocalizedError {
     case notEpub(String)
@@ -74,7 +73,7 @@ enum BookImportService {
     @discardableResult
     static func importBook(
         from sourceURL: URL,
-        modelContext: ModelContext,
+        store: AppStateStore,
         existingBookStrategy: ExistingBookStrategy = .skip,
         progressHandler: (@MainActor @Sendable (ImportProgress) -> Void)? = nil
     ) async throws -> Book? {
@@ -83,7 +82,7 @@ enum BookImportService {
             throw BookImportError.notEpub(filename)
         }
 
-        let existingBook = try existingBook(originalFilename: filename, modelContext: modelContext)
+        let existingBook = existingBook(originalFilename: filename, store: store)
         let existingBookSnapshot = existingBook.map(snapshot(for:))
 
         let bookID = existingBook?.id ?? UUID()
@@ -110,11 +109,11 @@ enum BookImportService {
         let book = try applyPreparedImport(
             preparedImport,
             existingBookID: existingBook?.id,
-            modelContext: modelContext
+            store: store
         )
         MediaOverlayPreparationCoordinator.shared.enqueuePreparation(
             for: book.id,
-            modelContext: modelContext,
+            store: store,
             priority: .utility
         )
 
@@ -128,7 +127,7 @@ enum BookImportService {
     @MainActor
     @discardableResult
     static func refreshBooksFromDocuments(
-        modelContext: ModelContext,
+        store: AppStateStore,
         progressHandler: (@MainActor @Sendable (RefreshProgress) -> Void)? = nil
     ) async throws -> [Book] {
         await reportRefreshProgress(
@@ -136,7 +135,7 @@ enum BookImportService {
             using: progressHandler
         )
 
-        let existingBooks = try modelContext.fetch(FetchDescriptor<Book>())
+        let existingBooks = store.books
         let fileManager = FileManager.default
         let epubURLs = try await refreshSourceEPUBURLs(
             existingBooks: existingBooks,
@@ -157,7 +156,7 @@ enum BookImportService {
 
         for book in removedBooks {
             try? BookAssetCacheService.removeAllCachedAssets(for: book.id)
-            modelContext.delete(book)
+            store.removeBook(id: book.id)
 
             completedOperations += 1
             await reportRefreshProgress(
@@ -259,7 +258,7 @@ enum BookImportService {
                         sourceFileSize: preparedImport.fingerprint.fileSize,
                         sourceFileModifiedAt: preparedImport.fingerprint.modifiedAt
                     )
-                    modelContext.insert(newBook)
+                    store.addBook(newBook)
                     book = newBook
                 }
 
@@ -282,12 +281,13 @@ enum BookImportService {
             RefreshProgress(fractionCompleted: 0.97, message: "Saving library..."),
             using: progressHandler
         )
-        try modelContext.save()
+        store.sortBooksByImportedAt()
+        store.persistNow()
 
         for bookID in overlayRetryIDs {
             MediaOverlayPreparationCoordinator.shared.enqueuePreparation(
                 for: bookID,
-                modelContext: modelContext,
+                store: store,
                 priority: .utility,
                 allowFailedRetry: true
             )
@@ -301,36 +301,24 @@ enum BookImportService {
     }
 
     @MainActor
-    private static func existingBook(originalFilename: String, modelContext: ModelContext) throws -> Book? {
-        var descriptor = FetchDescriptor<Book>(
-            predicate: #Predicate { book in
-                book.originalFilename == originalFilename
-            }
-        )
-        descriptor.fetchLimit = 1
-        return try modelContext.fetch(descriptor).first
+    private static func existingBook(originalFilename: String, store: AppStateStore) -> Book? {
+        store.firstBook(originalFilename: originalFilename)
     }
 
     @MainActor
-    private static func bookForID(_ id: UUID, modelContext: ModelContext) throws -> Book? {
-        var descriptor = FetchDescriptor<Book>(
-            predicate: #Predicate { book in
-                book.id == id
-            }
-        )
-        descriptor.fetchLimit = 1
-        return try modelContext.fetch(descriptor).first
+    private static func bookForID(_ id: UUID, store: AppStateStore) -> Book? {
+        store.book(withID: id)
     }
 
     @MainActor
     private static func applyPreparedImport(
         _ preparedImport: PreparedBookImport,
         existingBookID: UUID?,
-        modelContext: ModelContext
+        store: AppStateStore
     ) throws -> Book {
         let book: Book
         if let existingBookID,
-           let existingBook = try bookForID(existingBookID, modelContext: modelContext) {
+           let existingBook = bookForID(existingBookID, store: store) {
             existingBook.title = preparedImport.metadata.title ?? displayTitle(for: preparedImport.filename)
             existingBook.author = preparedImport.metadata.author ?? "Unknown Author"
             existingBook.originalFilename = preparedImport.filename
@@ -367,11 +355,12 @@ enum BookImportService {
                 sourceFileSize: preparedImport.fingerprint.fileSize,
                 sourceFileModifiedAt: preparedImport.fingerprint.modifiedAt
             )
-            modelContext.insert(newBook)
+            store.addBook(newBook)
             book = newBook
         }
 
-        try modelContext.save()
+        store.sortBooksByImportedAt()
+        store.persistNow()
         return book
     }
 
@@ -464,7 +453,7 @@ enum BookImportService {
         }
 
         let fileManager = FileManager.default
-        let libraryDirectory = try AppStorage.documentsDirectory()
+        let libraryDirectory = try AppStorage.booksDirectory()
         let destinationURL = libraryDirectory.appendingPathComponent(filename, isDirectory: false)
         let sourcePath = sourceURL.standardizedFileURL.path
         let destinationPath = destinationURL.standardizedFileURL.path
@@ -562,12 +551,8 @@ enum BookImportService {
     }
 
     @MainActor
-    static func restoreMissingCovers(modelContext: ModelContext) async {
-        let descriptor = FetchDescriptor<Book>()
-        guard let books = try? modelContext.fetch(descriptor) else {
-            return
-        }
-
+    static func restoreMissingCovers(store: AppStateStore) async {
+        let books = store.books
         var didUpdateLibrary = false
         for book in books {
             guard !BookAssetCacheService.hasCachedCover(for: book),
@@ -592,7 +577,7 @@ enum BookImportService {
         }
 
         if didUpdateLibrary {
-            try? modelContext.save()
+            store.persistNow()
         }
     }
 
@@ -686,7 +671,7 @@ enum BookImportService {
     }
 
     nonisolated private static func scannedLibraryEPUBURLs(fileManager: FileManager) throws -> [URL] {
-        let libraryDirectory = try AppStorage.documentsDirectory()
+        let libraryDirectory = try AppStorage.booksDirectory()
         return try fileManager.contentsOfDirectory(
             at: libraryDirectory,
             includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
@@ -823,11 +808,8 @@ final class MediaOverlayPreparationCoordinator {
 
     private init() {}
 
-    func resumePendingBooks(modelContext: ModelContext) {
-        let descriptor = FetchDescriptor<Book>()
-        guard let books = try? modelContext.fetch(descriptor) else {
-            return
-        }
+    func resumePendingBooks(store: AppStateStore) {
+        let books = store.books
 
         var didUpdateState = false
         for book in books {
@@ -838,23 +820,23 @@ final class MediaOverlayPreparationCoordinator {
             }
 
             if book.mediaOverlayPreparationState == .pending {
-                enqueuePreparation(for: book.id, modelContext: modelContext, priority: .utility)
+                enqueuePreparation(for: book.id, store: store, priority: .utility)
             }
         }
 
         if didUpdateState {
-            try? modelContext.save()
+            store.persistNow()
         }
     }
 
     func enqueuePreparation(
         for bookID: UUID,
-        modelContext: ModelContext,
+        store: AppStateStore,
         priority: TaskPriority,
         allowFailedRetry: Bool = false
     ) {
         guard tasks[bookID] == nil,
-              let book = fetchBook(id: bookID, modelContext: modelContext)
+              let book = fetchBook(id: bookID, store: store)
         else {
             return
         }
@@ -869,7 +851,7 @@ final class MediaOverlayPreparationCoordinator {
 
         book.mediaOverlayPreparationState = .processing
         book.mediaOverlayPreparationError = nil
-        try? modelContext.save()
+        store.persistNow()
 
         tasks[bookID] = Task { @MainActor [weak self] in
             defer { self?.tasks.removeValue(forKey: bookID) }
@@ -877,7 +859,7 @@ final class MediaOverlayPreparationCoordinator {
             guard let sourceURL = try? book.resolvedEPUBFileURL() else {
                 book.mediaOverlayPreparationState = .failed
                 book.mediaOverlayPreparationError = "The EPUB file could not be found."
-                try? modelContext.save()
+                store.persistNow()
                 return
             }
 
@@ -886,7 +868,7 @@ final class MediaOverlayPreparationCoordinator {
                     try EPUBMediaOverlayService.parseAndWrite(at: sourceURL, bookID: bookID)
                 }.value
 
-                guard let updatedBook = self?.fetchBook(id: bookID, modelContext: modelContext) else {
+                guard let updatedBook = self?.fetchBook(id: bookID, store: store) else {
                     return
                 }
 
@@ -896,9 +878,9 @@ final class MediaOverlayPreparationCoordinator {
                 updatedBook.mediaOverlayClipCount = result?.manifest.clipCount
                 updatedBook.mediaOverlayPreparationState = .ready
                 updatedBook.mediaOverlayPreparationError = nil
-                try? modelContext.save()
+                store.persistNow()
             } catch {
-                guard let updatedBook = self?.fetchBook(id: bookID, modelContext: modelContext) else {
+                guard let updatedBook = self?.fetchBook(id: bookID, store: store) else {
                     return
                 }
 
@@ -908,18 +890,18 @@ final class MediaOverlayPreparationCoordinator {
                 updatedBook.mediaOverlayClipCount = nil
                 updatedBook.mediaOverlayPreparationState = .failed
                 updatedBook.mediaOverlayPreparationError = error.localizedDescription
-                try? modelContext.save()
+                store.persistNow()
             }
         }
     }
 
-    func ensurePreparedForPlayback(bookID: UUID, modelContext: ModelContext) async {
+    func ensurePreparedForPlayback(bookID: UUID, store: AppStateStore) async {
         if let task = tasks[bookID] {
             await task.value
             return
         }
 
-        guard let book = fetchBook(id: bookID, modelContext: modelContext) else {
+        guard let book = fetchBook(id: bookID, store: store) else {
             return
         }
 
@@ -932,21 +914,17 @@ final class MediaOverlayPreparationCoordinator {
             }
             book.mediaOverlayPreparationState = .pending
             book.mediaOverlayPreparationError = nil
-            try? modelContext.save()
+            store.persistNow()
             fallthrough
         case .pending, .processing:
-            enqueuePreparation(for: bookID, modelContext: modelContext, priority: .userInitiated)
+            enqueuePreparation(for: bookID, store: store, priority: .userInitiated)
             if let task = tasks[bookID] {
                 await task.value
             }
         }
     }
 
-    private func fetchBook(id: UUID, modelContext: ModelContext) -> Book? {
-        var descriptor = FetchDescriptor<Book>(predicate: #Predicate { book in
-            book.id == id
-        })
-        descriptor.fetchLimit = 1
-        return try? modelContext.fetch(descriptor).first
+    private func fetchBook(id: UUID, store: AppStateStore) -> Book? {
+        store.book(withID: id)
     }
 }

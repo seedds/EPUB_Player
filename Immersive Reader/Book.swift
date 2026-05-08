@@ -5,10 +5,10 @@
 //  Created by F2PGOD on 25/4/2026.
 //
 
+import Combine
 import Foundation
-import SwiftData
 
-enum MediaOverlayPreparationState: String, CaseIterable {
+enum MediaOverlayPreparationState: String, CaseIterable, Codable {
     case pending
     case processing
     case ready
@@ -21,31 +21,30 @@ struct NormalizedBookStoragePaths: Equatable {
     let mediaOverlayJSONPath: String?
 }
 
-@Model
-final class Book {
-    var id: UUID
-    var title: String
-    var author: String
-    var originalFilename: String
-    var epubFilePath: String
-    var coverImagePath: String?
-    var language: String?
-    var metadataIdentifier: String?
-    var lastLocatorJSON: String?
-    var lastPlayedTextResourceHref: String?
-    var lastPlayedFragmentID: String?
-    var lastPlayedClipBegin: Double?
-    var lastPlayedClipEnd: Double?
-    var mediaOverlayJSONPath: String?
-    var mediaOverlayActiveClass: String?
-    var mediaOverlayDuration: Double?
-    var mediaOverlayClipCount: Int?
-    var mediaOverlayPreparationStateRawValue: String?
-    var mediaOverlayPreparationError: String?
-    var sourceFileSize: Int64?
-    var sourceFileModifiedAt: Date?
-    var importedAt: Date
-    var lastOpenedAt: Date?
+final class Book: ObservableObject, Identifiable, Codable, Hashable {
+    let id: UUID
+    @Published var title: String
+    @Published var author: String
+    @Published var originalFilename: String
+    @Published var epubFilePath: String
+    @Published var coverImagePath: String?
+    @Published var language: String?
+    @Published var metadataIdentifier: String?
+    @Published var lastLocatorJSON: String?
+    @Published var lastPlayedTextResourceHref: String?
+    @Published var lastPlayedFragmentID: String?
+    @Published var lastPlayedClipBegin: Double?
+    @Published var lastPlayedClipEnd: Double?
+    @Published var mediaOverlayJSONPath: String?
+    @Published var mediaOverlayActiveClass: String?
+    @Published var mediaOverlayDuration: Double?
+    @Published var mediaOverlayClipCount: Int?
+    @Published var mediaOverlayPreparationStateRawValue: String?
+    @Published var mediaOverlayPreparationError: String?
+    @Published var sourceFileSize: Int64?
+    @Published var sourceFileModifiedAt: Date?
+    @Published var importedAt: Date
+    @Published var lastOpenedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -96,6 +95,94 @@ final class Book {
         self.importedAt = importedAt
         self.lastOpenedAt = lastOpenedAt
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case author
+        case originalFilename
+        case epubFilePath
+        case coverImagePath
+        case language
+        case metadataIdentifier
+        case lastLocatorJSON
+        case lastPlayedTextResourceHref
+        case lastPlayedFragmentID
+        case lastPlayedClipBegin
+        case lastPlayedClipEnd
+        case mediaOverlayJSONPath
+        case mediaOverlayActiveClass
+        case mediaOverlayDuration
+        case mediaOverlayClipCount
+        case mediaOverlayPreparationStateRawValue
+        case mediaOverlayPreparationError
+        case sourceFileSize
+        case sourceFileModifiedAt
+        case importedAt
+        case lastOpenedAt
+    }
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        author = try container.decode(String.self, forKey: .author)
+        originalFilename = try container.decode(String.self, forKey: .originalFilename)
+        epubFilePath = try container.decode(String.self, forKey: .epubFilePath)
+        coverImagePath = try container.decodeIfPresent(String.self, forKey: .coverImagePath)
+        language = try container.decodeIfPresent(String.self, forKey: .language)
+        metadataIdentifier = try container.decodeIfPresent(String.self, forKey: .metadataIdentifier)
+        lastLocatorJSON = try container.decodeIfPresent(String.self, forKey: .lastLocatorJSON)
+        lastPlayedTextResourceHref = try container.decodeIfPresent(String.self, forKey: .lastPlayedTextResourceHref)
+        lastPlayedFragmentID = try container.decodeIfPresent(String.self, forKey: .lastPlayedFragmentID)
+        lastPlayedClipBegin = try container.decodeIfPresent(Double.self, forKey: .lastPlayedClipBegin)
+        lastPlayedClipEnd = try container.decodeIfPresent(Double.self, forKey: .lastPlayedClipEnd)
+        mediaOverlayJSONPath = try container.decodeIfPresent(String.self, forKey: .mediaOverlayJSONPath)
+        mediaOverlayActiveClass = try container.decodeIfPresent(String.self, forKey: .mediaOverlayActiveClass)
+        mediaOverlayDuration = try container.decodeIfPresent(Double.self, forKey: .mediaOverlayDuration)
+        mediaOverlayClipCount = try container.decodeIfPresent(Int.self, forKey: .mediaOverlayClipCount)
+        mediaOverlayPreparationStateRawValue = try container.decodeIfPresent(String.self, forKey: .mediaOverlayPreparationStateRawValue)
+        mediaOverlayPreparationError = try container.decodeIfPresent(String.self, forKey: .mediaOverlayPreparationError)
+        sourceFileSize = try container.decodeIfPresent(Int64.self, forKey: .sourceFileSize)
+        sourceFileModifiedAt = try container.decodeIfPresent(Date.self, forKey: .sourceFileModifiedAt)
+        importedAt = try container.decode(Date.self, forKey: .importedAt)
+        lastOpenedAt = try container.decodeIfPresent(Date.self, forKey: .lastOpenedAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(author, forKey: .author)
+        try container.encode(originalFilename, forKey: .originalFilename)
+        try container.encode(epubFilePath, forKey: .epubFilePath)
+        try container.encodeIfPresent(coverImagePath, forKey: .coverImagePath)
+        try container.encodeIfPresent(language, forKey: .language)
+        try container.encodeIfPresent(metadataIdentifier, forKey: .metadataIdentifier)
+        try container.encodeIfPresent(lastLocatorJSON, forKey: .lastLocatorJSON)
+        try container.encodeIfPresent(lastPlayedTextResourceHref, forKey: .lastPlayedTextResourceHref)
+        try container.encodeIfPresent(lastPlayedFragmentID, forKey: .lastPlayedFragmentID)
+        try container.encodeIfPresent(lastPlayedClipBegin, forKey: .lastPlayedClipBegin)
+        try container.encodeIfPresent(lastPlayedClipEnd, forKey: .lastPlayedClipEnd)
+        try container.encodeIfPresent(mediaOverlayJSONPath, forKey: .mediaOverlayJSONPath)
+        try container.encodeIfPresent(mediaOverlayActiveClass, forKey: .mediaOverlayActiveClass)
+        try container.encodeIfPresent(mediaOverlayDuration, forKey: .mediaOverlayDuration)
+        try container.encodeIfPresent(mediaOverlayClipCount, forKey: .mediaOverlayClipCount)
+        try container.encodeIfPresent(mediaOverlayPreparationStateRawValue, forKey: .mediaOverlayPreparationStateRawValue)
+        try container.encodeIfPresent(mediaOverlayPreparationError, forKey: .mediaOverlayPreparationError)
+        try container.encodeIfPresent(sourceFileSize, forKey: .sourceFileSize)
+        try container.encodeIfPresent(sourceFileModifiedAt, forKey: .sourceFileModifiedAt)
+        try container.encode(importedAt, forKey: .importedAt)
+        try container.encodeIfPresent(lastOpenedAt, forKey: .lastOpenedAt)
+    }
+
+    static func == (lhs: Book, rhs: Book) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
 }
 
 extension Book {
@@ -111,26 +198,26 @@ extension Book {
         }
     }
 
-    nonisolated var normalizedStoragePaths: NormalizedBookStoragePaths {
-        return NormalizedBookStoragePaths(
+    var normalizedStoragePaths: NormalizedBookStoragePaths {
+        NormalizedBookStoragePaths(
             epubFilePath: epubFilePath,
             coverImagePath: coverImagePath,
             mediaOverlayJSONPath: mediaOverlayJSONPath
         )
     }
 
-    nonisolated func resolvedEPUBFileURL() throws -> URL {
+    func resolvedEPUBFileURL() throws -> URL {
         try AppStorage.bookFileURL(storedPath: normalizedStoragePaths.epubFilePath)
     }
 
-    nonisolated func resolvedCoverImageURL() throws -> URL? {
+    func resolvedCoverImageURL() throws -> URL? {
         guard let storedPath = normalizedStoragePaths.coverImagePath else {
             return nil
         }
         return try AppStorage.coversDirectory().appendingPathComponent(storedPath, isDirectory: false)
     }
 
-    nonisolated func resolvedMediaOverlayJSONURL() throws -> URL? {
+    func resolvedMediaOverlayJSONURL() throws -> URL? {
         guard let storedPath = normalizedStoragePaths.mediaOverlayJSONPath else {
             return nil
         }

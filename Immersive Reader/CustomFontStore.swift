@@ -79,17 +79,17 @@ enum CustomFontStore {
         let style: ImportedFontStyle
     }
 
-    static func allFamilies() -> [ImportedFontFamily] {
-        let families = synchronizedFamilies().families
+    static func allFamilies(store: AppStateStore) -> [ImportedFontFamily] {
+        let families = synchronizedFamilies(store: store)
         registerFontsForUI(in: families)
         return families
     }
 
     @discardableResult
-    static func importFonts(from urls: [URL]) throws -> [ImportedFontFamily] {
+    static func importFonts(from urls: [URL], store: AppStateStore) throws -> [ImportedFontFamily] {
         let directory = try AppStorage.customFontsDirectory()
         let fileManager = FileManager.default
-        var snapshot = synchronizedFamilies().families
+        var snapshot = synchronizedFamilies(store: store)
         var changedFamilyIDs = Set<UUID>()
 
         for sourceURL in urls {
@@ -144,19 +144,18 @@ enum CustomFontStore {
         }
 
         snapshot = sortedFamilies(snapshot)
-        try save(families: snapshot)
-        synchronizeSelectedFontFamily(with: snapshot)
-        registerFontsForUI(in: snapshot)
+        store.setCustomFontFamilies(snapshot)
+        synchronizeSelectedFontFamily(with: snapshot, store: store)
         return snapshot.filter { changedFamilyIDs.contains($0.id) }
     }
 
-    static func removeFamilies(withIDs ids: some Sequence<UUID>) throws {
+    static func removeFamilies(withIDs ids: some Sequence<UUID>, store: AppStateStore) throws {
         let idsToRemove = Set(ids)
         guard !idsToRemove.isEmpty else {
             return
         }
 
-        let snapshot = synchronizedFamilies().families
+        let snapshot = synchronizedFamilies(store: store)
         let removedFiles = snapshot
             .filter { idsToRemove.contains($0.id) }
             .flatMap(\.files)
@@ -164,17 +163,17 @@ enum CustomFontStore {
         try removeStoredFiles(removedFiles)
 
         let remainingFamilies = snapshot.filter { !idsToRemove.contains($0.id) }
-        try save(families: remainingFamilies)
-        synchronizeSelectedFontFamily(with: remainingFamilies)
+        store.setCustomFontFamilies(remainingFamilies)
+        synchronizeSelectedFontFamily(with: remainingFamilies, store: store)
     }
 
-    static func removeFiles(withIDs ids: some Sequence<UUID>) throws {
+    static func removeFiles(withIDs ids: some Sequence<UUID>, store: AppStateStore) throws {
         let idsToRemove = Set(ids)
         guard !idsToRemove.isEmpty else {
             return
         }
 
-        let snapshot = synchronizedFamilies().families
+        let snapshot = synchronizedFamilies(store: store)
         let removedFiles = snapshot
             .flatMap(\.files)
             .filter { idsToRemove.contains($0.id) }
@@ -193,13 +192,13 @@ enum CustomFontStore {
         }
 
         let sortedRemainingFamilies = sortedFamilies(remainingFamilies)
-        try save(families: sortedRemainingFamilies)
-        synchronizeSelectedFontFamily(with: sortedRemainingFamilies)
+        store.setCustomFontFamilies(sortedRemainingFamilies)
+        synchronizeSelectedFontFamily(with: sortedRemainingFamilies, store: store)
     }
 
-    static func fontFamilyDeclarations() -> [AnyHTMLFontFamilyDeclaration] {
+    static func fontFamilyDeclarations(customFontFamilies: [ImportedFontFamily]) -> [AnyHTMLFontFamilyDeclaration] {
         let directory = try? AppStorage.customFontsDirectory()
-        return allFamilies().compactMap { family in
+        return customFontFamilies.compactMap { family in
             guard let directory else {
                 return nil
             }
@@ -225,28 +224,40 @@ enum CustomFontStore {
         }
     }
 
-    private static func synchronizedFamilies() -> (families: [ImportedFontFamily], didChange: Bool) {
-        let loadedFamilies = (try? loadFamilies()) ?? []
-        let directory = try? AppStorage.customFontsDirectory()
-        var didChange = false
+    static func registerFontsForUI(in families: [ImportedFontFamily]) {
+        guard let directory = try? AppStorage.customFontsDirectory() else {
+            return
+        }
+
+        for family in families {
+            for file in family.files {
+                let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+                guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                    continue
+                }
+
+                var registrationError: Unmanaged<CFError>?
+                CTFontManagerRegisterFontsForURL(fileURL as CFURL, .process, &registrationError)
+            }
+        }
+    }
+
+    private static func synchronizedFamilies(store: AppStateStore) -> [ImportedFontFamily] {
+        let loadedFamilies = store.customFontFamilies
+        guard let directory = try? AppStorage.customFontsDirectory() else {
+            if !loadedFamilies.isEmpty {
+                store.setCustomFontFamilies([])
+            }
+            return []
+        }
 
         let filteredFamilies = loadedFamilies.compactMap { family -> ImportedFontFamily? in
-            guard let directory else {
-                didChange = true
-                return nil
-            }
-
             let remainingFiles = family.files.filter { file in
                 let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
                 return FileManager.default.fileExists(atPath: fileURL.path)
             }
 
-            if remainingFiles.count != family.files.count {
-                didChange = true
-            }
-
             guard !remainingFiles.isEmpty else {
-                didChange = true
                 return nil
             }
 
@@ -257,30 +268,10 @@ enum CustomFontStore {
 
         let sortedFilteredFamilies = sortedFamilies(filteredFamilies)
         if sortedFilteredFamilies != loadedFamilies {
-            didChange = true
+            store.setCustomFontFamilies(sortedFilteredFamilies)
         }
-
-        if didChange {
-            try? save(families: sortedFilteredFamilies)
-        }
-        synchronizeSelectedFontFamily(with: sortedFilteredFamilies)
-        return (sortedFilteredFamilies, didChange)
-    }
-
-    private static func loadFamilies() throws -> [ImportedFontFamily] {
-        let metadataURL = try AppStorage.customFontsMetadataURL()
-        guard FileManager.default.fileExists(atPath: metadataURL.path) else {
-            return []
-        }
-
-        let data = try Data(contentsOf: metadataURL)
-        return try JSONDecoder().decode([ImportedFontFamily].self, from: data)
-    }
-
-    private static func save(families: [ImportedFontFamily]) throws {
-        let data = try JSONEncoder().encode(families)
-        let metadataURL = try AppStorage.customFontsMetadataURL()
-        try data.write(to: metadataURL, options: .atomic)
+        synchronizeSelectedFontFamily(with: sortedFilteredFamilies, store: store)
+        return sortedFilteredFamilies
     }
 
     private static func detectedFontMetadata(for fileURL: URL, fallbackFilename: String) -> DetectedFontMetadata {
@@ -403,35 +394,15 @@ enum CustomFontStore {
         return pathExtension == "ttf" || pathExtension == "otf"
     }
 
-    private static func synchronizeSelectedFontFamily(with families: [ImportedFontFamily]) {
-        let defaults = UserDefaults.standard
-        let selectedFontFamily = defaults.string(forKey: ReaderSettings.fontFamilyKey) ?? ""
-        guard selectedFontFamily.hasPrefix("custom-font-") else {
+    private static func synchronizeSelectedFontFamily(with families: [ImportedFontFamily], store: AppStateStore) {
+        guard store.fontFamilyRawValue.hasPrefix("custom-font-") else {
             return
         }
 
-        if families.contains(where: { $0.fontFamily == selectedFontFamily }) {
+        if families.contains(where: { $0.fontFamily == store.fontFamilyRawValue }) {
             return
         }
 
-        defaults.set("", forKey: ReaderSettings.fontFamilyKey)
-    }
-
-    private static func registerFontsForUI(in families: [ImportedFontFamily]) {
-        guard let directory = try? AppStorage.customFontsDirectory() else {
-            return
-        }
-
-        for family in families {
-            for file in family.files {
-                let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
-                guard FileManager.default.fileExists(atPath: fileURL.path) else {
-                    continue
-                }
-
-                var registrationError: Unmanaged<CFError>?
-                CTFontManagerRegisterFontsForURL(fileURL as CFURL, .process, &registrationError)
-            }
-        }
+        store.fontFamilyRawValue = ""
     }
 }

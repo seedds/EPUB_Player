@@ -88,14 +88,6 @@ nonisolated enum ReaderSettings {
         UInt16(normalizedUploadServerPort(value))
     }
 
-    static func storedUploadServerPort() -> UInt16 {
-        let defaults = UserDefaults.standard
-        guard defaults.object(forKey: uploadServerPortKey) != nil else {
-            return uploadServerPort(from: defaultUploadServerPort)
-        }
-        return uploadServerPort(from: defaults.integer(forKey: uploadServerPortKey))
-    }
-
     static func playbackSpeedText(_ value: Double) -> String {
         let normalized = normalizedPlaybackSpeed(value)
         let roundedValue = normalized.rounded()

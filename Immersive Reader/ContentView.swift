@@ -5,17 +5,15 @@
 //  Created by F2PGOD on 25/4/2026.
 //
 
-import SwiftData
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import ReadiumShared
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var store: AppStateStore
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var uploadServer = UploadServerController()
-    @SwiftUI.AppStorage(ReaderSettings.themeKey) private var themeRawValue = AppThemeOption.system.rawValue
     @State private var hasResumedPendingMediaOverlayPreparation = false
 
     var body: some View {
@@ -35,27 +33,26 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gearshape")
                 }
         }
-        .preferredColorScheme(ReaderSettings.appTheme(from: themeRawValue).preferredColorScheme)
+        .preferredColorScheme(ReaderSettings.appTheme(from: store.themeRawValue).preferredColorScheme)
         .task {
             guard !hasResumedPendingMediaOverlayPreparation else {
                 return
             }
             hasResumedPendingMediaOverlayPreparation = true
-            MediaOverlayPreparationCoordinator.shared.resumePendingBooks(modelContext: modelContext)
+            MediaOverlayPreparationCoordinator.shared.resumePendingBooks(store: store)
         }
         .task(id: scenePhase) {
             guard scenePhase == .active else {
                 return
             }
 
-            await BookImportService.restoreMissingCovers(modelContext: modelContext)
+            await BookImportService.restoreMissingCovers(store: store)
         }
     }
 }
 
 private struct BooksView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \Book.importedAt, order: .reverse) private var books: [Book]
+    @EnvironmentObject private var store: AppStateStore
     @ObservedObject var controller: UploadServerController
 
     @State private var isImporting = false
@@ -67,6 +64,7 @@ private struct BooksView: View {
 
     var body: some View {
         NavigationStack {
+            let books = store.books
             Group {
                 if books.isEmpty {
                     ContentUnavailableView {
@@ -158,7 +156,7 @@ private struct BooksView: View {
     private func handleImport(_ result: Result<[URL], Error>) {
         do {
             let urls = try result.get()
-            controller.importBooks(from: urls, modelContext: modelContext)
+            controller.importBooks(from: urls, store: store)
         } catch {
             importError = error.localizedDescription
         }
@@ -166,6 +164,7 @@ private struct BooksView: View {
 
     private func deleteBooks(at offsets: IndexSet) {
         let fileManager = FileManager.default
+        let books = store.books
 
         for index in offsets {
             let book = books[index]
@@ -173,10 +172,10 @@ private struct BooksView: View {
                 try? fileManager.removeItem(at: epubURL)
             }
             try? BookAssetCacheService.removeAllCachedAssets(for: book.id)
-            modelContext.delete(book)
+            store.removeBook(id: book.id)
         }
 
-        try? modelContext.save()
+        store.persistNow()
     }
 
     private func refreshBooks() {
@@ -195,7 +194,7 @@ private struct BooksView: View {
             }
 
             do {
-                try await BookImportService.refreshBooksFromDocuments(modelContext: modelContext) { progress in
+                try await BookImportService.refreshBooksFromDocuments(store: store) { progress in
                     refreshProgress = progress.fractionCompleted
                     refreshStatus = progress.message
                 }
@@ -270,7 +269,7 @@ private struct BooksView: View {
 }
 
 private struct BookRow: View {
-    let book: Book
+    @ObservedObject var book: Book
     let showsTopSeparator: Bool
 
     var body: some View {
@@ -437,8 +436,7 @@ private struct BookCoverView: View {
 }
 
 private struct UploadView: View {
-    @Environment(\.modelContext) private var modelContext
-    @SwiftUI.AppStorage(ReaderSettings.uploadServerPortKey) private var uploadServerPort = ReaderSettings.defaultUploadServerPort
+    @EnvironmentObject private var store: AppStateStore
     @ObservedObject var controller: UploadServerController
     @FocusState private var isPortFieldFocused: Bool
     @State private var portText = ""
@@ -481,8 +479,8 @@ private struct UploadView: View {
                         case .running:
                             controller.stop()
                         case .stopped, .failed:
-                            controller.port = ReaderSettings.uploadServerPort(from: uploadServerPort)
-                            controller.start(modelContext: modelContext)
+                            controller.port = ReaderSettings.uploadServerPort(from: store.uploadServerPort)
+                            controller.start(store: store)
                         }
                     } label: {
                         Text(controller.status == .running ? "Stop Server" : "Start Server")
@@ -497,7 +495,7 @@ private struct UploadView: View {
                 }
 
                 Section("Storage") {
-                    Text("The server accepts .epub, .ttf, and .otf files. EPUBs are stored directly in the app's Documents folder and should appear in Files under On My iPhone/ImmersiveReader. Font files are imported into Reader > Custom Fonts.")
+                    Text("The server accepts .epub, .ttf, and .otf files. EPUBs are stored in the app's Documents/Books folder and should appear in Files under On My iPhone/ImmersiveReader/Books. Covers, read-aloud cache, uploaded fonts, and app state are stored in Documents/Cache.")
                 }
 
                 if !controller.activeUploads.isEmpty {
@@ -569,16 +567,16 @@ private struct UploadView: View {
                     commitPortText()
                 }
             }
-            .onChange(of: uploadServerPort) { _, _ in
+            .onChange(of: store.uploadServerPort) { _, _ in
                 syncPortText()
             }
         }
     }
 
     private func syncPortText() {
-        let normalizedPort = ReaderSettings.normalizedUploadServerPort(uploadServerPort)
-        if uploadServerPort != normalizedPort {
-            uploadServerPort = normalizedPort
+        let normalizedPort = ReaderSettings.normalizedUploadServerPort(store.uploadServerPort)
+        if store.uploadServerPort != normalizedPort {
+            store.uploadServerPort = normalizedPort
         }
         portText = "\(normalizedPort)"
         if controller.status != .running {
@@ -589,7 +587,7 @@ private struct UploadView: View {
     private func commitPortText() {
         let digits = String(portText.filter(\.isNumber))
         let normalizedPort = ReaderSettings.normalizedUploadServerPort(Int(digits) ?? ReaderSettings.defaultUploadServerPort)
-        uploadServerPort = normalizedPort
+        store.uploadServerPort = normalizedPort
         portText = "\(normalizedPort)"
         if controller.status != .running {
             controller.port = ReaderSettings.uploadServerPort(from: normalizedPort)
@@ -622,22 +620,16 @@ private struct UploadView: View {
 }
 
 private struct SettingsView: View {
-    @SwiftUI.AppStorage(ReaderSettings.fontSizeKey) private var fontSize = ReaderSettings.defaultFontSize
-    @SwiftUI.AppStorage(ReaderSettings.lineHeightKey) private var lineHeight = ReaderSettings.defaultLineHeight
-    @SwiftUI.AppStorage(ReaderSettings.fontFamilyKey) private var fontFamilyRawValue = ""
-    @SwiftUI.AppStorage(ReaderSettings.themeKey) private var themeRawValue = AppThemeOption.system.rawValue
-    @SwiftUI.AppStorage(ReaderSettings.readAloudColorKey) private var readAloudColorRawValue = ReaderSettings.defaultReadAloudColorHex
-    @SwiftUI.AppStorage(ReaderSettings.playbackSpeedKey) private var playbackSpeed = ReaderSettings.defaultPlaybackSpeed
-    @SwiftUI.AppStorage(ReaderSettings.playbackJumpIntervalKey) private var playbackJumpInterval = ReaderSettings.defaultPlaybackJumpInterval
+    @EnvironmentObject private var store: AppStateStore
     @State private var customFontFamilies: [CustomFontStore.ImportedFontFamily] = []
 
     private var playbackJumpIntervalSliderValue: Binding<Double> {
         Binding(
             get: {
-                Double(playbackJumpIntervalIndex(for: ReaderSettings.normalizedPlaybackJumpInterval(playbackJumpInterval)))
+                Double(playbackJumpIntervalIndex(for: ReaderSettings.normalizedPlaybackJumpInterval(store.playbackJumpInterval)))
             },
             set: { newValue in
-                playbackJumpInterval = playbackJumpIntervalValue(for: Int(newValue.rounded()))
+                store.playbackJumpInterval = playbackJumpIntervalValue(for: Int(newValue.rounded()))
             }
         )
     }
@@ -650,14 +642,14 @@ private struct SettingsView: View {
                         HStack {
                             Text("Font Size")
                             Spacer()
-                            Text(ReaderSettings.fontSizeText(fontSize))
+                            Text(ReaderSettings.fontSizeText(store.fontSize))
                                 .foregroundStyle(.secondary)
                         }
 
                         Slider(
                             value: Binding(
-                                get: { ReaderSettings.normalizedFontSize(fontSize) },
-                                set: { fontSize = ReaderSettings.normalizedFontSize($0) }
+                                get: { ReaderSettings.normalizedFontSize(store.fontSize) },
+                                set: { store.fontSize = ReaderSettings.normalizedFontSize($0) }
                             ),
                             in: ReaderSettings.fontSizeRange,
                             step: ReaderSettings.fontSizeStep
@@ -668,14 +660,14 @@ private struct SettingsView: View {
                         HStack {
                             Text("Line Height")
                             Spacer()
-                            Text(ReaderSettings.lineHeightText(lineHeight))
+                            Text(ReaderSettings.lineHeightText(store.lineHeight))
                                 .foregroundStyle(.secondary)
                         }
 
                         Slider(
                             value: Binding(
-                                get: { ReaderSettings.normalizedLineHeight(lineHeight) },
-                                set: { lineHeight = ReaderSettings.normalizedLineHeight($0) }
+                                get: { ReaderSettings.normalizedLineHeight(store.lineHeight) },
+                                set: { store.lineHeight = ReaderSettings.normalizedLineHeight($0) }
                             ),
                             in: ReaderSettings.lineHeightRange,
                             step: ReaderSettings.lineHeightStep
@@ -686,14 +678,14 @@ private struct SettingsView: View {
                         HStack {
                             Text("Playback Speed")
                             Spacer()
-                            Text(ReaderSettings.playbackSpeedText(playbackSpeed))
+                            Text(ReaderSettings.playbackSpeedText(store.playbackSpeed))
                                 .foregroundStyle(.secondary)
                         }
 
                         Slider(
                             value: Binding(
-                                get: { ReaderSettings.normalizedPlaybackSpeed(playbackSpeed) },
-                                set: { playbackSpeed = ReaderSettings.normalizedPlaybackSpeed($0) }
+                                get: { ReaderSettings.normalizedPlaybackSpeed(store.playbackSpeed) },
+                                set: { store.playbackSpeed = ReaderSettings.normalizedPlaybackSpeed($0) }
                             ),
                             in: ReaderSettings.playbackSpeedRange,
                             step: ReaderSettings.playbackSpeedStep
@@ -704,7 +696,7 @@ private struct SettingsView: View {
                         HStack {
                             Text("Skip Interval")
                             Spacer()
-                            Text(ReaderSettings.playbackJumpIntervalText(playbackJumpInterval))
+                            Text(ReaderSettings.playbackJumpIntervalText(store.playbackJumpInterval))
                                 .foregroundStyle(.secondary)
                         }
 
@@ -717,7 +709,10 @@ private struct SettingsView: View {
 
                     NavigationLink {
                         FontFamilySelectionView(
-                            selectedFontFamilyRawValue: $fontFamilyRawValue,
+                            selectedFontFamilyRawValue: Binding(
+                                get: { store.fontFamilyRawValue },
+                                set: { store.fontFamilyRawValue = $0 }
+                            ),
                             customFontFamilies: customFontFamilies
                         )
                         .toolbar(.hidden, for: .tabBar)
@@ -748,7 +743,10 @@ private struct SettingsView: View {
                 }
 
                 Section("Appearance") {
-                    Picker("Theme", selection: $themeRawValue) {
+                    Picker("Theme", selection: Binding(
+                        get: { store.themeRawValue },
+                        set: { store.themeRawValue = $0 }
+                    )) {
                         ForEach(AppThemeOption.allCases) { option in
                             Text(option.name).tag(option.rawValue)
                         }
@@ -756,7 +754,10 @@ private struct SettingsView: View {
                     .pickerStyle(.segmented)
 
                     NavigationLink {
-                        ReadAloudColorEditor(colorHex: $readAloudColorRawValue)
+                        ReadAloudColorEditor(colorHex: Binding(
+                            get: { store.readAloudColorRawValue },
+                            set: { store.readAloudColorRawValue = $0 }
+                        ))
                             .padding(.horizontal, 16)
                             .padding(.top, 12)
                             .padding(.bottom, 16)
@@ -770,7 +771,7 @@ private struct SettingsView: View {
                             Spacer()
 
                             Circle()
-                                .fill(ReaderSettings.color(from: readAloudColorRawValue))
+                                .fill(ReaderSettings.color(from: store.readAloudColorRawValue))
                                 .frame(width: 22, height: 22)
                                 .overlay {
                                     Circle()
@@ -795,7 +796,7 @@ private struct SettingsView: View {
     }
 
     private var selectedFontFamilyName: String {
-        ReaderSettings.fontFamilyName(from: fontFamilyRawValue, customFontFamilies: customFontFamilies)
+        ReaderSettings.fontFamilyName(from: store.fontFamilyRawValue, customFontFamilies: customFontFamilies)
     }
 
     private func playbackJumpIntervalIndex(for value: Double) -> Int {
@@ -808,11 +809,12 @@ private struct SettingsView: View {
     }
 
     private func loadCustomFonts() {
-        customFontFamilies = CustomFontStore.allFamilies()
+        customFontFamilies = CustomFontStore.allFamilies(store: store)
     }
 }
 
 private struct CustomFontsView: View {
+    @EnvironmentObject private var store: AppStateStore
     let onFontsChanged: () -> Void
 
     @State private var importedFamilies: [CustomFontStore.ImportedFontFamily] = []
@@ -931,7 +933,7 @@ private struct CustomFontsView: View {
     private func handleImport(_ result: Result<[URL], Error>) {
         do {
             let urls = try result.get()
-            try CustomFontStore.importFonts(from: urls)
+            try CustomFontStore.importFonts(from: urls, store: store)
             reloadFonts()
             onFontsChanged()
         } catch {
@@ -941,7 +943,7 @@ private struct CustomFontsView: View {
 
     private func removeFamilies(withIDs ids: [UUID]) {
         do {
-            try CustomFontStore.removeFamilies(withIDs: ids)
+            try CustomFontStore.removeFamilies(withIDs: ids, store: store)
             familyPendingDeletion = nil
             reloadFonts()
             onFontsChanged()
@@ -952,7 +954,7 @@ private struct CustomFontsView: View {
 
     private func removeFiles(withIDs ids: [UUID]) {
         do {
-            try CustomFontStore.removeFiles(withIDs: ids)
+            try CustomFontStore.removeFiles(withIDs: ids, store: store)
             reloadFonts()
             onFontsChanged()
         } catch {
@@ -961,7 +963,7 @@ private struct CustomFontsView: View {
     }
 
     private func reloadFonts() {
-        importedFamilies = CustomFontStore.allFamilies()
+        importedFamilies = CustomFontStore.allFamilies(store: store)
         expandedFamilyIDs.formIntersection(Set(importedFamilies.map(\.id)))
     }
 
@@ -1233,5 +1235,5 @@ private extension UTType {
 
 #Preview {
     ContentView()
-        .modelContainer(for: Book.self, inMemory: true)
+        .environmentObject(AppStateStore())
 }

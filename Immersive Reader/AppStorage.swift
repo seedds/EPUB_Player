@@ -17,46 +17,36 @@ enum AppStorage {
         )
     }
 
-    nonisolated static func applicationSupportDirectory() throws -> URL {
-        let supportDirectory = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        return try ensureDirectory(supportDirectory.appendingPathComponent("Immersive Reader", isDirectory: true))
+    nonisolated static func booksDirectory() throws -> URL {
+        try ensureDirectory(documentsDirectory().appendingPathComponent("Books", isDirectory: true))
+    }
+
+    nonisolated static func cacheDirectory() throws -> URL {
+        try ensureDirectory(documentsDirectory().appendingPathComponent("Cache", isDirectory: true))
     }
 
     nonisolated static func uploadsDirectory() throws -> URL {
-        try ensureDirectory(
-            FileManager.default.temporaryDirectory
-                .appendingPathComponent("Immersive Reader", isDirectory: true)
-                .appendingPathComponent("Uploads", isDirectory: true)
-        )
+        try ensureDirectory(cacheDirectory().appendingPathComponent("Uploads", isDirectory: true))
     }
 
     nonisolated static func customFontsDirectory() throws -> URL {
-        try ensureDirectory(applicationSupportDirectory().appendingPathComponent("CustomFonts", isDirectory: true))
+        try ensureDirectory(cacheDirectory().appendingPathComponent("Fonts", isDirectory: true))
     }
 
     nonisolated static func coversDirectory() throws -> URL {
-        try ensureDirectory(applicationSupportDirectory().appendingPathComponent("Covers", isDirectory: true))
+        try ensureDirectory(cacheDirectory().appendingPathComponent("Covers", isDirectory: true))
     }
 
     nonisolated static func mediaOverlaysDirectory() throws -> URL {
-        try ensureDirectory(applicationSupportDirectory().appendingPathComponent("MediaOverlays", isDirectory: true))
+        try ensureDirectory(cacheDirectory().appendingPathComponent("MediaOverlays", isDirectory: true))
     }
 
     nonisolated static func audioCacheDirectory() throws -> URL {
-        try ensureDirectory(
-            FileManager.default.temporaryDirectory
-                .appendingPathComponent("Immersive Reader", isDirectory: true)
-                .appendingPathComponent("AudioCache", isDirectory: true)
-        )
+        try ensureDirectory(cacheDirectory().appendingPathComponent("AudioCache", isDirectory: true))
     }
 
-    nonisolated static func customFontsMetadataURL() throws -> URL {
-        try applicationSupportDirectory().appendingPathComponent("custom-fonts.json", isDirectory: false)
+    nonisolated static func stateURL() throws -> URL {
+        try cacheDirectory().appendingPathComponent("state.json", isDirectory: false)
     }
 
     nonisolated static func coverImageURL(for bookID: UUID, pathExtension: String) throws -> URL {
@@ -83,11 +73,21 @@ enum AppStorage {
     }
 
     nonisolated static func storedBookPath(for filename: String) -> String {
-        sanitizedFilename(filename)
+        "Books/\(sanitizedFilename(filename))"
     }
 
     nonisolated static func bookFileURL(storedPath: String) throws -> URL {
-        try documentsDirectory().appendingPathComponent(storedPath, isDirectory: false)
+        let pathComponents = storedPath.split(separator: "/").map(String.init)
+        guard !pathComponents.isEmpty else {
+            return try documentsDirectory()
+        }
+
+        var fileURL = try documentsDirectory()
+        for component in pathComponents.dropLast() {
+            fileURL.appendPathComponent(component, isDirectory: true)
+        }
+        fileURL.appendPathComponent(pathComponents[pathComponents.count - 1], isDirectory: false)
+        return fileURL
     }
 
     nonisolated static func sanitizedFilename(_ filename: String) -> String {
