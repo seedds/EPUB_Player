@@ -433,7 +433,7 @@ enum BookImportService {
             return PreparedBookImport(
                 id: bookID,
                 filename: filename,
-                epubFilePath: filename,
+                epubFilePath: AppStorage.storedBookPath(for: filename),
                 metadata: metadata,
                 mediaOverlayJSONPath: nil,
                 mediaOverlayActiveClass: nil,
@@ -511,7 +511,7 @@ enum BookImportService {
         return PreparedBookImport(
             id: bookID,
             filename: filename,
-            epubFilePath: filename,
+            epubFilePath: AppStorage.storedBookPath(for: filename),
             metadata: metadata,
             mediaOverlayJSONPath: nil,
             mediaOverlayActiveClass: nil,
@@ -652,10 +652,10 @@ enum BookImportService {
             fingerprint.modifiedAt,
             existingBook.sourceFileModifiedAt
         )
-        let storedFilename = AppStorage.sanitizedFilename(existingBook.originalFilename)
+        let storedFilename = URL(fileURLWithPath: existingBook.epubFilePath).lastPathComponent
         let libraryFilename = libraryFileURL.lastPathComponent
         let filenameMatches = storedFilename == libraryFilename
-        let epubExists = (try? AppStorage.bookFileURL(named: existingBook.originalFilename))
+        let epubExists = (try? AppStorage.bookFileURL(storedPath: existingBook.epubFilePath))
             .map { fileManager.fileExists(atPath: $0.path) } ?? false
         guard fileSizeMatches,
               modifiedAtMatches,

@@ -470,7 +470,7 @@ final class UploadServerController: ObservableObject {
         if book.title == previousDisplayTitle {
             book.title = displayTitle(for: filename)
         }
-        book.epubFilePath = filename
+        book.epubFilePath = AppStorage.storedBookPath(for: filename)
         try modelContext.save()
     }
 

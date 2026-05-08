@@ -82,8 +82,12 @@ enum AppStorage {
         return try audioCacheDirectory(for: bookID).appendingPathComponent(filename, isDirectory: false)
     }
 
-    nonisolated static func bookFileURL(named filename: String) throws -> URL {
-        try documentsDirectory().appendingPathComponent(sanitizedFilename(filename), isDirectory: false)
+    nonisolated static func storedBookPath(for filename: String) -> String {
+        sanitizedFilename(filename)
+    }
+
+    nonisolated static func bookFileURL(storedPath: String) throws -> URL {
+        try documentsDirectory().appendingPathComponent(storedPath, isDirectory: false)
     }
 
     nonisolated static func sanitizedFilename(_ filename: String) -> String {

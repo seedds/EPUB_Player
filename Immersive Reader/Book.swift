@@ -112,19 +112,15 @@ extension Book {
     }
 
     nonisolated var normalizedStoragePaths: NormalizedBookStoragePaths {
-        let normalizedEPUBPath = AppStorage.sanitizedFilename(
-            originalFilename.isEmpty ? URL(fileURLWithPath: epubFilePath).lastPathComponent : originalFilename
-        )
-
         return NormalizedBookStoragePaths(
-            epubFilePath: normalizedEPUBPath,
+            epubFilePath: epubFilePath,
             coverImagePath: coverImagePath,
             mediaOverlayJSONPath: mediaOverlayJSONPath
         )
     }
 
     nonisolated func resolvedEPUBFileURL() throws -> URL {
-        try AppStorage.bookFileURL(named: normalizedStoragePaths.epubFilePath)
+        try AppStorage.bookFileURL(storedPath: normalizedStoragePaths.epubFilePath)
     }
 
     nonisolated func resolvedCoverImageURL() throws -> URL? {
