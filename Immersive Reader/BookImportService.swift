@@ -106,22 +106,27 @@ enum BookImportService {
             using: progressHandler
         )
 
-        let book = try applyPreparedImport(
-            preparedImport,
-            existingBookID: existingBook?.id,
-            store: store
-        )
-        MediaOverlayPreparationCoordinator.shared.enqueuePreparation(
-            for: book.id,
-            store: store,
-            priority: .utility
-        )
+        do {
+            let book = try applyPreparedImport(
+                preparedImport,
+                existingBookID: existingBook?.id,
+                store: store
+            )
+            MediaOverlayPreparationCoordinator.shared.enqueuePreparation(
+                for: book.id,
+                store: store,
+                priority: .utility
+            )
 
-        await reportImportProgress(
-            ImportProgress(fractionCompleted: 1, message: "Import complete"),
-            using: progressHandler
-        )
-        return book
+            await reportImportProgress(
+                ImportProgress(fractionCompleted: 1, message: "Import complete"),
+                using: progressHandler
+            )
+            return book
+        } catch {
+            try? cleanupPreparedImport(preparedImport, bookID: bookID)
+            throw error
+        }
     }
 
     @MainActor
@@ -722,6 +727,36 @@ enum BookImportService {
             .deletingPathExtension()
             .lastPathComponent
             .replacingOccurrences(of: "_", with: " ")
+    }
+
+    /// Removes files created during import preparation if the import fails.
+    ///
+    /// This prevents orphaned files from accumulating when imports fail after
+    /// files have been copied but before the book is added to the app state.
+    ///
+    /// - Parameters:
+    ///   - preparedImport: The prepared import containing file paths to clean up
+    ///   - bookID: The book ID used for cache directories
+    private static func cleanupPreparedImport(_ preparedImport: PreparedBookImport, bookID: UUID) throws {
+        let fileManager = FileManager.default
+
+        if let epubURL = try? AppStorage.bookFileURL(storedPath: preparedImport.epubFilePath) {
+            try? fileManager.removeItem(at: epubURL)
+        }
+
+        if let coverPath = preparedImport.metadata.coverImagePath,
+           let coverURL = try? AppStorage.coversDirectory().appendingPathComponent(coverPath) {
+            try? fileManager.removeItem(at: coverURL)
+        }
+
+        if let overlayPath = preparedImport.mediaOverlayJSONPath,
+           let overlayURL = try? AppStorage.mediaOverlaysDirectory().appendingPathComponent(overlayPath) {
+            try? fileManager.removeItem(at: overlayURL)
+        }
+
+        if let audioCacheDir = try? AppStorage.audioCacheDirectory(for: bookID) {
+            try? fileManager.removeItem(at: audioCacheDir)
+        }
     }
 }
 

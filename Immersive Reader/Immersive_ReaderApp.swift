@@ -13,6 +13,7 @@ import UIKit
 @main
 struct Immersive_ReaderApp: App {
     @StateObject private var appStateStore = AppStateStore()
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         #if canImport(UIKit)
@@ -33,6 +34,11 @@ struct Immersive_ReaderApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appStateStore)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
+                appStateStore.persistNow()
+            }
         }
     }
 }

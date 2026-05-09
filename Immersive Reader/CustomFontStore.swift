@@ -22,6 +22,9 @@ enum CustomFontStoreError: LocalizedError {
 }
 
 enum CustomFontStore {
+    private static var registeredFontURLs: Set<URL> = []
+    private static let registrationLock = NSLock()
+
     struct ImportedFontFamily: Codable, Identifiable, Hashable, Sendable {
         let id: UUID
         let displayName: String
@@ -164,6 +167,7 @@ enum CustomFontStore {
             .flatMap(\.files)
 
         try removeStoredFiles(removedFiles)
+        unregisterFontsFromCache(removedFiles)
 
         let remainingFamilies = snapshot.filter { !idsToRemove.contains($0.id) }
         store.setCustomFontFamilies(remainingFamilies)
@@ -183,6 +187,7 @@ enum CustomFontStore {
             .filter { idsToRemove.contains($0.id) }
 
         try removeStoredFiles(removedFiles)
+        unregisterFontsFromCache(removedFiles)
 
         let remainingFamilies = snapshot.compactMap { family -> ImportedFontFamily? in
             let remainingFiles = family.files.filter { !idsToRemove.contains($0.id) }
@@ -233,15 +238,27 @@ enum CustomFontStore {
             return
         }
 
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+
         for family in families {
             for file in family.files {
                 let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+
+                guard !registeredFontURLs.contains(fileURL) else {
+                    continue
+                }
+
                 guard FileManager.default.fileExists(atPath: fileURL.path) else {
                     continue
                 }
 
                 var registrationError: Unmanaged<CFError>?
-                CTFontManagerRegisterFontsForURL(fileURL as CFURL, .process, &registrationError)
+                let success = CTFontManagerRegisterFontsForURL(fileURL as CFURL, .process, &registrationError)
+
+                if success {
+                    registeredFontURLs.insert(fileURL)
+                }
             }
         }
     }
@@ -279,6 +296,20 @@ enum CustomFontStore {
         return sortedFilteredFamilies
     }
 
+    /// Extracts font family name and style from a font file using CoreText.
+    ///
+    /// The detection strategy:
+    /// 1. Try to load font descriptors from the file using CTFontManager
+    /// 2. Extract family name from kCTFontFamilyNameAttribute
+    /// 3. Determine italic style by checking:
+    ///    - CTFontSymbolicTraits for .traitItalic flag
+    ///    - Style name for "italic" or "oblique" keywords (case-insensitive)
+    /// 4. Fall back to filename parsing if CoreText fails
+    ///
+    /// - Parameters:
+    ///   - fileURL: Path to the .ttf or .otf font file
+    ///   - fallbackFilename: Original filename to parse if CoreText fails
+    /// - Returns: Detected family name and style, or filename-based fallback
     private static func detectedFontMetadata(for fileURL: URL, fallbackFilename: String) -> DetectedFontMetadata {
         guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(fileURL as CFURL) as? [CTFontDescriptor],
               let descriptor = descriptors.first
@@ -360,6 +391,20 @@ enum CustomFontStore {
             if fileManager.fileExists(atPath: fileURL.path) {
                 try? fileManager.removeItem(at: fileURL)
             }
+        }
+    }
+
+    private static func unregisterFontsFromCache(_ files: [ImportedFontFile]) {
+        guard let directory = try? AppStorage.customFontsDirectory() else {
+            return
+        }
+
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+
+        for file in files {
+            let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+            registeredFontURLs.remove(fileURL)
         }
     }
 
