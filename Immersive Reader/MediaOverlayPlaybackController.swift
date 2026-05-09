@@ -31,6 +31,9 @@ final class MediaOverlayPlaybackController: ObservableObject {
     @Published private(set) var canJumpForward = false
 
     private static var nextTransitionID: Int = 0
+    /// Maximum time gap (in seconds) between consecutive clips in the same audio file
+    /// that allows seamless playback without reloading the player.
+    /// Clips separated by less than this duration will continue playing from the current position.
     private let seamlessAutoAdvanceTolerance: Double = 0.1
     private var playbackRate = ReaderSettings.defaultPlaybackSpeed
     private var jumpInterval = ReaderSettings.defaultPlaybackJumpInterval
@@ -237,6 +240,25 @@ final class MediaOverlayPlaybackController: ObservableObject {
         selectClip(at: targetIndex, autoplay: state.isPlaying, reason: "jump[\(reason)]")
     }
 
+    /// Starts playback of a media overlay clip with race condition protection.
+    ///
+    /// This method handles the complex state transitions required for audio playback:
+    /// 1. Cleans up any existing observers to prevent duplicate callbacks
+    /// 2. Configures the audio session for playback
+    /// 3. Prepares or reuses the AVPlayer for the clip's audio file
+    /// 4. Seeks to the clip's start time with zero tolerance for precision
+    /// 5. Verifies the clip is still current before starting (user may have navigated away)
+    /// 6. Checks the transitionID to prevent stale async callbacks from starting playback
+    ///
+    /// The transitionID pattern prevents race conditions where:
+    /// - User rapidly taps next/previous
+    /// - Async seek completes after user has moved to a different clip
+    /// - Old callback would incorrectly start playback of the wrong clip
+    ///
+    /// - Parameters:
+    ///   - clip: The media overlay clip to play
+    ///   - reason: Debug string for logging the playback trigger
+    ///   - transitionID: Unique ID for this playback transition, used to invalidate stale callbacks
     private func start(_ clip: EPUBMediaOverlayClip, reason: String, transitionID: Int) {
         removeObservers(reason: "start[\(reason)]")
 
