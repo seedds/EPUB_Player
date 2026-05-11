@@ -203,12 +203,6 @@ final class MediaOverlayPlaybackController: ObservableObject {
         currentTransitionID = nil
 
         currentClipIndex = index
-        let clip = clips[index]
-        let fragment = clip.fragmentID ?? "nil"
-        let clipEnd = clip.clipEnd.map { String($0) } ?? "nil"
-        print(
-            "[MO] selectClip reason=\(reason) index=\(index) href=\(clip.textResourceHref) fragment=\(fragment) begin=\(clip.clipBegin) end=\(clipEnd) autoplay=\(autoplay)"
-        )
         scheduleRefreshJumpAvailability()
 
         if autoplay {
