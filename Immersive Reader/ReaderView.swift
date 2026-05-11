@@ -31,6 +31,7 @@ struct ReaderView: View {
     @State private var navigatorFrame: CGRect = .zero
     @State private var playbackBarFrame: CGRect = .zero
     @State private var lastHandledPlaybackStartClipKey: String?
+    @State private var pendingDecorationClipKey: String?
     @State private var pendingChapterEntryPlaybackStartClipKey: String?
     @State private var openingStatusMessage = "Opening EPUB..."
     @State private var openingSecondaryMessage: String?
@@ -79,6 +80,7 @@ struct ReaderView: View {
             isPlaybackSpeedControlPresented = false
             isReaderSettingsControlPresented = false
             lastHandledPlaybackStartClipKey = nil
+            pendingDecorationClipKey = nil
             playback.stop(reason: "readerView.onDisappear")
         }
     }
@@ -576,18 +578,10 @@ struct ReaderView: View {
     @MainActor
     private func restoreLastPlayedClipSelectionIfAvailable(with navigator: EPUBNavigatorViewController) async {
         guard let restoredIndex = restoredLastPlayedClipIndex() else {
-            mediaOverlayDebugLog("restoreLastPlayedClip noSavedClip")
             navigator.apply(decorations: [], in: mediaOverlayDecorationGroup)
             return
         }
 
-        let storedHref = book.lastPlayedTextResourceHref ?? "nil"
-        let storedFragment = book.lastPlayedFragmentID ?? "nil"
-        let storedBegin = stringValue(book.lastPlayedClipBegin)
-        let storedEnd = stringValue(book.lastPlayedClipEnd)
-        mediaOverlayDebugLog(
-            "restoreLastPlayedClip storedHref=\(storedHref) storedFragment=\(storedFragment) storedBegin=\(storedBegin) storedEnd=\(storedEnd) restoredIndex=\(restoredIndex)"
-        )
         playback.selectClip(at: restoredIndex, autoplay: false, reason: "restoreLastPlayedClip")
         await navigateToCurrentClip(with: navigator)
         applyCurrentClipDecoration(with: navigator)
@@ -619,7 +613,7 @@ struct ReaderView: View {
     @MainActor
     private func handleLocationDidChange(_ locator: Locator, navigator: EPUBNavigatorViewController) {
         currentLocationReference = normalizedReference(for: locator.href.string)
-        mediaOverlayDebugLog("locationDidChange currentLocation=\(currentLocationDescription())")
+        applyDeferredCurrentClipDecorationIfNeeded(with: navigator)
         guard !isSuppressingLocationPersistence else {
             return
         }
@@ -632,24 +626,10 @@ struct ReaderView: View {
         guard let clip = playback.currentClip,
               let locator = playbackLocator(for: clip)
         else {
-            mediaOverlayDebugLog("navigateToCurrentClip missingClipOrLocator")
             return
         }
 
-        await logMediaOverlayContext(
-            "navigateToCurrentClip.begin",
-            navigator: navigator,
-            clip: clip,
-            clipIndex: playback.currentClipIndex
-        )
-        let didNavigate = await navigator.go(to: locator, options: .animated)
-        await logMediaOverlayContext(
-            "navigateToCurrentClip.end",
-            navigator: navigator,
-            clip: clip,
-            clipIndex: playback.currentClipIndex,
-            extra: "didNavigate=\(didNavigate)"
-        )
+        _ = await navigator.go(to: locator, options: .animated)
     }
 
     @MainActor
@@ -659,24 +639,10 @@ struct ReaderView: View {
             fragmentID: nil
         )
         guard let locator = locator(for: reference) else {
-            mediaOverlayDebugLog("navigateToClipResourceTop missingLocator clip=\(mediaOverlayClipSummary(clip, index: playback.currentClipIndex))")
             return
         }
 
-        await logMediaOverlayContext(
-            "navigateToClipResourceTop.begin",
-            navigator: navigator,
-            clip: clip,
-            clipIndex: playback.currentClipIndex
-        )
-        let didNavigate = await navigator.go(to: locator, options: .animated)
-        await logMediaOverlayContext(
-            "navigateToClipResourceTop.end",
-            navigator: navigator,
-            clip: clip,
-            clipIndex: playback.currentClipIndex,
-            extra: "didNavigate=\(didNavigate)"
-        )
+        _ = await navigator.go(to: locator, options: .animated)
     }
 
     @MainActor
@@ -711,15 +677,6 @@ struct ReaderView: View {
     @MainActor
     private func startPlaybackFromVisibleOrForwardPosition(with navigator: EPUBNavigatorViewController) async {
         let targetClipIndex = await resolvedPlaybackStartClipIndex(with: navigator)
-        let targetIndexDescription = stringValue(targetClipIndex)
-        await logMediaOverlayContext(
-            "startPlaybackFromVisibleOrForwardPosition.resolved",
-            navigator: navigator,
-            clip: playback.currentClip,
-            clipIndex: playback.currentClipIndex,
-            extra: "targetIndex=\(targetIndexDescription)"
-        )
-
         if let targetClipIndex,
            playback.currentClipIndex != targetClipIndex {
             playback.selectClip(at: targetClipIndex, autoplay: true, reason: "startPlaybackFromVisibleOrForwardPosition")
@@ -745,14 +702,6 @@ struct ReaderView: View {
         if usesChapterEntryScrollBehavior {
             pendingChapterEntryPlaybackStartClipKey = nil
         }
-
-        await logMediaOverlayContext(
-            "handleClipPlaybackStartIfNeeded.begin",
-            navigator: navigator,
-            clip: currentClip,
-            clipIndex: playback.currentClipIndex,
-            extra: "usesChapterEntryScrollBehavior=\(usesChapterEntryScrollBehavior)"
-        )
 
         if currentClip.fragmentID?.isEmpty != false {
             if !(await isCurrentClipResourceVisible(with: navigator, clip: currentClip)) {
@@ -919,13 +868,6 @@ struct ReaderView: View {
 
     @MainActor
     private func handleCurrentClipChange(oldIndex: Int?, newIndex: Int?, navigator: EPUBNavigatorViewController) {
-        let previousClip = oldIndex.flatMap { playback.clips.indices.contains($0) ? playback.clips[$0] : nil }
-        let selectedClip = newIndex.flatMap { playback.clips.indices.contains($0) ? playback.clips[$0] : nil }
-        let oldIndexDescription = stringValue(oldIndex)
-        let newIndexDescription = stringValue(newIndex)
-        mediaOverlayDebugLog(
-            "currentClipChange old=\(oldIndexDescription) new=\(newIndexDescription) currentLocation=\(currentLocationDescription()) oldClip=\(mediaOverlayClipSummary(previousClip, index: oldIndex)) newClip=\(mediaOverlayClipSummary(selectedClip, index: newIndex))"
-        )
         applyCurrentClipDecoration(with: navigator)
         persistLastPlayedClip()
 
@@ -1097,17 +1039,7 @@ struct ReaderView: View {
         })();
         """
 
-        let result = await navigator.evaluateJavaScript(script)
-        switch result {
-        case .success(let value):
-            mediaOverlayDebugLog(
-                "repositionCurrentClipForPlaybackIfNeeded result=\(String(describing: value)) clip=\(mediaOverlayClipSummary(currentClip, index: playback.currentClipIndex))"
-            )
-        case .failure(let error):
-            mediaOverlayDebugLog(
-                "repositionCurrentClipForPlaybackIfNeeded error=\(error.localizedDescription) clip=\(mediaOverlayClipSummary(currentClip, index: playback.currentClipIndex))"
-            )
-        }
+        _ = await navigator.evaluateJavaScript(script)
     }
 
     @MainActor
@@ -1251,7 +1183,6 @@ struct ReaderView: View {
     @MainActor
     private func resolvedPlaybackStartClipIndex(with navigator: EPUBNavigatorViewController) async -> Int? {
         guard let visibleLocator = await navigator.firstVisibleElementLocator() else {
-            mediaOverlayDebugLog("resolvedPlaybackStartClipIndex noVisibleLocator")
             return nil
         }
 
@@ -1267,9 +1198,6 @@ struct ReaderView: View {
             resourceHref: visibleResourceHref,
             fragmentID: visibleFragmentID
               )) {
-            mediaOverlayDebugLog(
-                "resolvedPlaybackStartClipIndex source=inViewport visible=\(visibleResourceHref)#\(visibleFragmentID) index=\(visibleClipIndex)"
-            )
             return visibleClipIndex
         }
 
@@ -1282,9 +1210,6 @@ struct ReaderView: View {
             resourceHref: visibleResourceHref,
             fragmentID: beforeFragmentID
               )) {
-            mediaOverlayDebugLog(
-                "resolvedPlaybackStartClipIndex source=beforeViewport visible=\(visibleResourceHref)#\(beforeFragmentID) index=\(beforeClipIndex)"
-            )
             return beforeClipIndex
         }
 
@@ -1297,22 +1222,13 @@ struct ReaderView: View {
             resourceHref: visibleResourceHref,
             fragmentID: forwardFragmentID
               )) {
-            mediaOverlayDebugLog(
-                "resolvedPlaybackStartClipIndex source=afterViewport visible=\(visibleResourceHref)#\(forwardFragmentID) index=\(forwardClipIndex)"
-            )
             return forwardClipIndex
         }
 
         if let laterClipIndex = firstClipIndex(afterResourceHref: visibleResourceHref) {
-            mediaOverlayDebugLog(
-                "resolvedPlaybackStartClipIndex source=laterResource visibleResource=\(visibleResourceHref) index=\(laterClipIndex)"
-            )
             return laterClipIndex
         }
 
-        mediaOverlayDebugLog(
-            "resolvedPlaybackStartClipIndex noMatch visibleResource=\(visibleResourceHref) playableCount=\(playableIDs.count)"
-        )
         return nil
     }
 
@@ -1480,14 +1396,19 @@ struct ReaderView: View {
         guard let clip = playback.currentClip,
               let href = RelativeURL(epubHREF: clip.textResourceHref)
         else {
-            mediaOverlayDebugLog("applyCurrentClipDecoration clearing currentLocation=\(currentLocationDescription())")
+            pendingDecorationClipKey = nil
             navigator.apply(decorations: [], in: mediaOverlayDecorationGroup)
             return
         }
 
-        mediaOverlayDebugLog(
-            "applyCurrentClipDecoration currentLocation=\(currentLocationDescription()) clip=\(mediaOverlayClipSummary(clip, index: playback.currentClipIndex))"
-        )
+        let clipKey = playbackStartClipKey(for: clip)
+        let clipResourceHref = normalizedResourceHref(for: clip.textResourceHref)
+        guard currentLocationReference?.resourceHref == clipResourceHref else {
+            pendingDecorationClipKey = clipKey
+            return
+        }
+
+        pendingDecorationClipKey = nil
 
         let locator = Locator(
             href: href,
@@ -1512,65 +1433,17 @@ struct ReaderView: View {
         )
     }
 
-    private func mediaOverlayDebugLog(_ message: String) {
-        print("[MO] \(message)")
-    }
-
-    private func mediaOverlayClipSummary(_ clip: EPUBMediaOverlayClip?, index: Int?) -> String {
-        let indexDescription = stringValue(index)
-        guard let clip else {
-            return "index=\(indexDescription) clip=nil"
-        }
-
-        let fragment = clip.fragmentID ?? "nil"
-        let clipEnd = stringValue(clip.clipEnd)
-        return "index=\(indexDescription) href=\(normalizedResourceHref(for: clip.textResourceHref)) fragment=\(fragment) begin=\(clip.clipBegin) end=\(clipEnd)"
-    }
-
-    private func stringValue<T>(_ value: T?) -> String {
-        value.map { String(describing: $0) } ?? "nil"
-    }
-
-    private func currentLocationDescription() -> String {
-        guard let currentLocationReference else {
-            return "nil"
-        }
-
-        if let fragmentID = currentLocationReference.fragmentID,
-           !fragmentID.isEmpty {
-            return "\(currentLocationReference.resourceHref)#\(fragmentID)"
-        }
-
-        return currentLocationReference.resourceHref
-    }
-
     @MainActor
-    private func logMediaOverlayContext(
-        _ event: String,
-        navigator: EPUBNavigatorViewController,
-        clip: EPUBMediaOverlayClip?,
-        clipIndex: Int?,
-        extra: String = ""
-    ) async {
-        let visibleDescription: String
-        if let visibleLocator = await navigator.firstVisibleElementLocator() {
-            let visibleReference = normalizedReference(for: visibleLocator.href.string)
-            let visibleHref = visibleReference.resourceHref
-            let visibleFragment = visibleReference.fragmentID
-            if let visibleFragment,
-               !visibleFragment.isEmpty {
-                visibleDescription = "\(visibleHref)#\(visibleFragment)"
-            } else {
-                visibleDescription = visibleHref
-            }
-        } else {
-            visibleDescription = "nil"
+    private func applyDeferredCurrentClipDecorationIfNeeded(with navigator: EPUBNavigatorViewController) {
+        guard let pendingDecorationClipKey,
+              let currentClip = playback.currentClip,
+              playbackStartClipKey(for: currentClip) == pendingDecorationClipKey,
+              currentLocationReference?.resourceHref == normalizedResourceHref(for: currentClip.textResourceHref)
+        else {
+            return
         }
 
-        let suffix = extra.isEmpty ? "" : " \(extra)"
-        mediaOverlayDebugLog(
-            "\(event) visible=\(visibleDescription) currentLocation=\(currentLocationDescription()) clip=\(mediaOverlayClipSummary(clip, index: clipIndex))\(suffix)"
-        )
+        applyCurrentClipDecoration(with: navigator)
     }
 }
 
