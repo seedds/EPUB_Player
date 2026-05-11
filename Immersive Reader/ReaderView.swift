@@ -679,8 +679,6 @@ struct ReaderView: View {
         } else if playback.currentClipIndex != nil {
             playback.play(reason: "startPlaybackFromVisibleOrForwardPosition.resumeCurrentClip")
         }
-
-        applyCurrentClipDecoration(with: navigator)
     }
 
     @MainActor
