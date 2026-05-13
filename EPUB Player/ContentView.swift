@@ -623,88 +623,32 @@ private struct SettingsView: View {
     @EnvironmentObject private var store: AppStateStore
     @State private var customFontFamilies: [CustomFontStore.ImportedFontFamily] = []
 
-    private var playbackJumpIntervalSliderValue: Binding<Double> {
-        Binding(
-            get: {
-                Double(playbackJumpIntervalIndex(for: ReaderSettings.normalizedPlaybackJumpInterval(store.playbackJumpInterval)))
-            },
-            set: { newValue in
-                store.playbackJumpInterval = playbackJumpIntervalValue(for: Int(newValue.rounded()))
-            }
-        )
-    }
-
     var body: some View {
         NavigationStack {
             Form {
                 Section("Reader") {
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack {
-                            Text("Font Size")
-                            Spacer()
-                            Text(ReaderSettings.fontSizeText(store.fontSize))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Slider(
-                            value: Binding(
-                                get: { ReaderSettings.normalizedFontSize(store.fontSize) },
-                                set: { store.fontSize = ReaderSettings.normalizedFontSize($0) }
-                            ),
-                            in: ReaderSettings.fontSizeRange,
-                            step: ReaderSettings.fontSizeStep
-                        )
-                    }
-
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack {
-                            Text("Line Height")
-                            Spacer()
-                            Text(ReaderSettings.lineHeightText(store.lineHeight))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Slider(
-                            value: Binding(
-                                get: { ReaderSettings.normalizedLineHeight(store.lineHeight) },
-                                set: { store.lineHeight = ReaderSettings.normalizedLineHeight($0) }
-                            ),
-                            in: ReaderSettings.lineHeightRange,
-                            step: ReaderSettings.lineHeightStep
-                        )
-                    }
-
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack {
-                            Text("Playback Speed")
-                            Spacer()
-                            Text(ReaderSettings.playbackSpeedText(store.playbackSpeed))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Slider(
-                            value: Binding(
-                                get: { ReaderSettings.normalizedPlaybackSpeed(store.playbackSpeed) },
-                                set: { store.playbackSpeed = ReaderSettings.normalizedPlaybackSpeed($0) }
-                            ),
-                            in: ReaderSettings.playbackSpeedRange,
-                            step: ReaderSettings.playbackSpeedStep
-                        )
-                    }
-
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack {
-                            Text("Skip Interval")
-                            Spacer()
+                    NavigationLink {
+                        SkipIntervalSettingView(playbackJumpInterval: Binding(
+                            get: { store.playbackJumpInterval },
+                            set: { store.playbackJumpInterval = $0 }
+                        ))
+                        .toolbar(.hidden, for: .tabBar)
+                    } label: {
+                        SettingsNavigationRow(title: "Skip Interval") {
                             Text(ReaderSettings.playbackJumpIntervalText(store.playbackJumpInterval))
-                                .foregroundStyle(.secondary)
                         }
+                    }
 
-                        Slider(
-                            value: playbackJumpIntervalSliderValue,
-                            in: 0 ... Double(ReaderSettings.playbackJumpIntervalOptions.count - 1),
-                            step: 1
-                        )
+                    NavigationLink {
+                        AutoRewindSettingView(autoRewindAfterBackgroundMinutes: Binding(
+                            get: { store.autoRewindAfterBackgroundMinutes },
+                            set: { store.autoRewindAfterBackgroundMinutes = $0 }
+                        ))
+                        .toolbar(.hidden, for: .tabBar)
+                    } label: {
+                        SettingsNavigationRow(title: "Auto Rewind") {
+                            Text(ReaderSettings.autoRewindAfterBackgroundText(store.autoRewindAfterBackgroundMinutes))
+                        }
                     }
 
                     NavigationLink {
@@ -717,13 +661,8 @@ private struct SettingsView: View {
                         )
                         .toolbar(.hidden, for: .tabBar)
                     } label: {
-                        HStack {
-                            Text("Font Family")
-
-                            Spacer()
-
+                        SettingsNavigationRow(title: "Font Family") {
                             Text(selectedFontFamilyName)
-                                .foregroundStyle(.secondary)
                         }
                     }
 
@@ -731,27 +670,24 @@ private struct SettingsView: View {
                         CustomFontsView(onFontsChanged: loadCustomFonts)
                             .toolbar(.hidden, for: .tabBar)
                     } label: {
-                        HStack {
-                            Text("Custom Fonts")
-
-                            Spacer()
-
+                        SettingsNavigationRow(title: "Custom Fonts") {
                             Text(customFontStatusText)
-                                .foregroundStyle(.secondary)
                         }
                     }
                 }
 
                 Section("Appearance") {
-                    Picker("Theme", selection: Binding(
-                        get: { store.themeRawValue },
-                        set: { store.themeRawValue = $0 }
-                    )) {
-                        ForEach(AppThemeOption.allCases) { option in
-                            Text(option.name).tag(option.rawValue)
+                    NavigationLink {
+                        ThemeSelectionView(selectedThemeRawValue: Binding(
+                            get: { store.themeRawValue },
+                            set: { store.themeRawValue = $0 }
+                        ))
+                        .toolbar(.hidden, for: .tabBar)
+                    } label: {
+                        SettingsNavigationRow(title: "Theme") {
+                            Text(selectedThemeName)
                         }
                     }
-                    .pickerStyle(.segmented)
 
                     NavigationLink {
                         ReadAloudColorEditor(colorHex: Binding(
@@ -765,11 +701,7 @@ private struct SettingsView: View {
                             .navigationBarTitleDisplayMode(.inline)
                             .toolbar(.hidden, for: .tabBar)
                     } label: {
-                        HStack(spacing: 12) {
-                            Text("Highlight Color")
-
-                            Spacer()
-
+                        SettingsNavigationRow(title: "Highlight Color") {
                             Circle()
                                 .fill(ReaderSettings.color(from: store.readAloudColorRawValue))
                                 .frame(width: 22, height: 22)
@@ -778,11 +710,11 @@ private struct SettingsView: View {
                                         .stroke(.black.opacity(0.08), lineWidth: 1)
                                 }
                         }
-                        .contentShape(Rectangle())
                     }
                 }
 
             }
+            .navigationTitle("Settings")
             .onAppear(perform: loadCustomFonts)
         }
     }
@@ -799,17 +731,133 @@ private struct SettingsView: View {
         ReaderSettings.fontFamilyName(from: store.fontFamilyRawValue, customFontFamilies: customFontFamilies)
     }
 
-    private func playbackJumpIntervalIndex(for value: Double) -> Int {
-        ReaderSettings.playbackJumpIntervalOptions.firstIndex(of: value) ?? 0
-    }
-
-    private func playbackJumpIntervalValue(for index: Int) -> Double {
-        let clampedIndex = min(max(index, 0), ReaderSettings.playbackJumpIntervalOptions.count - 1)
-        return ReaderSettings.playbackJumpIntervalOptions[clampedIndex]
+    private var selectedThemeName: String {
+        ReaderSettings.appTheme(from: store.themeRawValue).name
     }
 
     private func loadCustomFonts() {
         customFontFamilies = CustomFontStore.allFamilies(store: store)
+    }
+}
+
+private struct SettingsNavigationRow<Trailing: View>: View {
+    let title: String
+    let trailing: Trailing
+
+    init(title: String, @ViewBuilder trailing: () -> Trailing) {
+        self.title = title
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+
+            Spacer(minLength: 12)
+
+            trailing
+                .foregroundStyle(.secondary)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+private struct SkipIntervalSettingView: View {
+    @Binding var playbackJumpInterval: Double
+
+    private var sliderValue: Binding<Double> {
+        Binding(
+            get: {
+                Double(ReaderSettings.playbackJumpIntervalOptions.firstIndex(of: ReaderSettings.normalizedPlaybackJumpInterval(playbackJumpInterval)) ?? 0)
+            },
+            set: { newValue in
+                let clampedIndex = min(max(Int(newValue.rounded()), 0), ReaderSettings.playbackJumpIntervalOptions.count - 1)
+                playbackJumpInterval = ReaderSettings.playbackJumpIntervalOptions[clampedIndex]
+            }
+        )
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                ReaderSettingSliderRow(
+                    title: "Skip Interval",
+                    valueText: ReaderSettings.playbackJumpIntervalText(playbackJumpInterval),
+                    value: sliderValue,
+                    range: 0 ... Double(ReaderSettings.playbackJumpIntervalOptions.count - 1),
+                    step: 1
+                )
+            }
+        }
+        .navigationTitle("Skip Interval")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct ThemeSelectionView: View {
+    @Binding var selectedThemeRawValue: String
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(AppThemeOption.allCases) { option in
+                    SettingsSelectionRow(
+                        title: option.name,
+                        isSelected: option.rawValue == selectedThemeRawValue
+                    ) {
+                        selectedThemeRawValue = option.rawValue
+                    }
+                }
+            }
+        }
+        .navigationTitle("Theme")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct AutoRewindSettingView: View {
+    @Binding var autoRewindAfterBackgroundMinutes: Int
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(ReaderSettings.autoRewindAfterBackgroundMinuteOptions, id: \.self) { minutes in
+                    SettingsSelectionRow(
+                        title: ReaderSettings.autoRewindAfterBackgroundText(minutes),
+                        isSelected: minutes == ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(autoRewindAfterBackgroundMinutes)
+                    ) {
+                        autoRewindAfterBackgroundMinutes = minutes
+                    }
+                }
+            } footer: {
+                Text("When you return after the selected time away, playback rewinds 10 seconds to the start of that sentence.")
+            }
+        }
+        .navigationTitle("Auto Rewind")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct SettingsSelectionRow: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Text(title)
+
+                Spacer(minLength: 12)
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.tint)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

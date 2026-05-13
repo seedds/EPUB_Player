@@ -38,6 +38,14 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertTrue(store.customFontFamilies.isEmpty, "New store should have no custom fonts")
         XCTAssertEqual(store.fontSize, ReaderSettings.defaultFontSize)
         XCTAssertEqual(store.lineHeight, ReaderSettings.defaultLineHeight)
+        XCTAssertEqual(store.autoRewindAfterBackgroundMinutes, ReaderSettings.defaultAutoRewindAfterBackgroundMinutes)
+    }
+
+    func testAutoRewindNormalization() {
+        XCTAssertEqual(ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(1), 1)
+        XCTAssertEqual(ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(3), 2)
+        XCTAssertEqual(ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(6), 5)
+        XCTAssertEqual(ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(99), 10)
     }
 
     func testAddBook() async throws {

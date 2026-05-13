@@ -13,6 +13,7 @@ import WebKit
 
 struct ReaderView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var store: AppStateStore
     @StateObject private var playback = MediaOverlayPlaybackController()
 
@@ -33,6 +34,7 @@ struct ReaderView: View {
     @State private var lastHandledPlaybackStartClipKey: String?
     @State private var pendingDecorationClipKey: String?
     @State private var pendingChapterEntryPlaybackStartClipKey: String?
+    @State private var backgroundEnteredAt: Date?
     @State private var openingStatusMessage = "Opening EPUB..."
     @State private var openingSecondaryMessage: String?
     @State private var openingProgress: Double?
@@ -81,7 +83,13 @@ struct ReaderView: View {
             isReaderSettingsControlPresented = false
             lastHandledPlaybackStartClipKey = nil
             pendingDecorationClipKey = nil
+            backgroundEnteredAt = nil
             playback.stop(reason: "readerView.onDisappear")
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            Task {
+                await handleScenePhaseChange(newPhase)
+            }
         }
     }
 
@@ -136,6 +144,45 @@ struct ReaderView: View {
         } catch {
             state = .failed(error.localizedDescription)
         }
+    }
+
+    @MainActor
+    private func handleScenePhaseChange(_ newPhase: ScenePhase) async {
+        switch newPhase {
+        case .background:
+            backgroundEnteredAt = Date()
+            if playback.currentClip != nil {
+                persistLastPlayedClip()
+            }
+        case .active:
+            await handleAutoRewindIfNeeded()
+        case .inactive:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    @MainActor
+    private func handleAutoRewindIfNeeded() async {
+        guard let backgroundEnteredAt else {
+            return
+        }
+
+        self.backgroundEnteredAt = nil
+
+        let requiredMinutes = ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(
+            store.autoRewindAfterBackgroundMinutes
+        )
+        let requiredBackgroundDuration = TimeInterval(requiredMinutes * 60)
+
+        guard Date().timeIntervalSince(backgroundEnteredAt) >= requiredBackgroundDuration,
+              playback.currentClip != nil
+        else {
+            return
+        }
+
+        await playback.jump(by: -10, reason: "autoRewindAfterBackground")
     }
 
     @ViewBuilder
