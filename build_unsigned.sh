@@ -1,8 +1,8 @@
 rm -rf build/DerivedData export && \
 mkdir -p .build/source-packages build export/Payload && \
 xcodebuild \
-  -project "Immersive Reader.xcodeproj" \
-  -scheme "Immersive Reader" \
+  -project "EPUB Player.xcodeproj" \
+  -scheme "EPUB Player" \
   -configuration Release \
   -sdk iphoneos \
   -derivedDataPath build/DerivedData \
@@ -13,6 +13,6 @@ xcodebuild \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGN_IDENTITY="" \
   build && \
-  cp -R "build/DerivedData/Build/Products/Release-iphoneos/ImmersiveReader.app" "export/Payload/" && \
+  cp -R "build/DerivedData/Build/Products/Release-iphoneos/EPUBPlayer.app" "export/Payload/" && \
   cd export && \
-  zip -r "ImmersiveReader-${APP_VERSION:-1.0}-unsigned.ipa" Payload
+  zip -r "EPUBPlayer-${APP_VERSION:-1.0}-unsigned.ipa" Payload
