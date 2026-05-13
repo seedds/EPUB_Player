@@ -18,6 +18,7 @@ private struct PersistedAppState: Codable {
     var readAloudColorRawValue: String
     var playbackSpeed: Double
     var playbackJumpInterval: Double
+    var autoRewindAfterBackgroundMinutes: Int?
     var uploadServerPort: Int
 
     static let `default` = PersistedAppState(
@@ -30,6 +31,7 @@ private struct PersistedAppState: Codable {
         readAloudColorRawValue: ReaderSettings.defaultReadAloudColorHex,
         playbackSpeed: ReaderSettings.defaultPlaybackSpeed,
         playbackJumpInterval: ReaderSettings.defaultPlaybackJumpInterval,
+        autoRewindAfterBackgroundMinutes: ReaderSettings.defaultAutoRewindAfterBackgroundMinutes,
         uploadServerPort: ReaderSettings.defaultUploadServerPort
     )
 }
@@ -45,6 +47,7 @@ final class AppStateStore: ObservableObject {
     @Published var readAloudColorRawValue = ReaderSettings.defaultReadAloudColorHex { didSet { scheduleSave() } }
     @Published var playbackSpeed = ReaderSettings.defaultPlaybackSpeed { didSet { scheduleSave() } }
     @Published var playbackJumpInterval = ReaderSettings.defaultPlaybackJumpInterval { didSet { scheduleSave() } }
+    @Published var autoRewindAfterBackgroundMinutes = ReaderSettings.defaultAutoRewindAfterBackgroundMinutes { didSet { scheduleSave() } }
     @Published var uploadServerPort = ReaderSettings.defaultUploadServerPort { didSet { scheduleSave() } }
 
     private var bookSubscriptions: [UUID: AnyCancellable] = [:]
@@ -117,6 +120,9 @@ final class AppStateStore: ObservableObject {
         readAloudColorRawValue = persistedState.readAloudColorRawValue
         playbackSpeed = persistedState.playbackSpeed
         playbackJumpInterval = persistedState.playbackJumpInterval
+        autoRewindAfterBackgroundMinutes = ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(
+            persistedState.autoRewindAfterBackgroundMinutes ?? ReaderSettings.defaultAutoRewindAfterBackgroundMinutes
+        )
         uploadServerPort = persistedState.uploadServerPort
         configureBookSubscriptions()
     }
@@ -155,6 +161,9 @@ final class AppStateStore: ObservableObject {
             readAloudColorRawValue: readAloudColorRawValue,
             playbackSpeed: playbackSpeed,
             playbackJumpInterval: playbackJumpInterval,
+            autoRewindAfterBackgroundMinutes: ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(
+                autoRewindAfterBackgroundMinutes
+            ),
             uploadServerPort: uploadServerPort
         )
 

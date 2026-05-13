@@ -18,9 +18,9 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		5FBAAC792F9CB28400CDF69E /* Immersive Reader */ = {
+		5FBAAC792F9CB28400CDF69E /* EPUB Player */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "Immersive Reader";
+			path = "EPUB Player";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -43,7 +43,7 @@
 		5FBAAC6E2F9CB28400CDF69E = {
 			isa = PBXGroup;
 			children = (
-				5FBAAC792F9CB28400CDF69E /* Immersive Reader */,
+				5FBAAC792F9CB28400CDF69E /* EPUB Player */,
 				5FBAAC782F9CB28400CDF69E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -59,9 +59,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		5FBAAC762F9CB28400CDF69E /* Immersive Reader */ = {
+		5FBAAC762F9CB28400CDF69E /* EPUB Player */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 5FBAAC842F9CB28500CDF69E /* Build configuration list for PBXNativeTarget "Immersive Reader" */;
+			buildConfigurationList = 5FBAAC842F9CB28500CDF69E /* Build configuration list for PBXNativeTarget "EPUB Player" */;
 			buildPhases = (
 				5FBAAC732F9CB28400CDF69E /* Sources */,
 				5FBAAC742F9CB28400CDF69E /* Frameworks */,
@@ -72,9 +72,9 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				5FBAAC792F9CB28400CDF69E /* Immersive Reader */,
+				5FBAAC792F9CB28400CDF69E /* EPUB Player */,
 			);
-			name = "Immersive Reader";
+			name = "EPUB Player";
 			packageProductDependencies = (
 				5FBAAC8C2F9D000100CDF69E /* ReadiumShared */,
 				5FBAAC8D2F9D000100CDF69E /* ReadiumStreamer */,
@@ -100,7 +100,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 5FBAAC722F9CB28400CDF69E /* Build configuration list for PBXProject "Immersive Reader" */;
+			buildConfigurationList = 5FBAAC722F9CB28400CDF69E /* Build configuration list for PBXProject "EPUB Player" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -117,7 +117,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				5FBAAC762F9CB28400CDF69E /* Immersive Reader */,
+				5FBAAC762F9CB28400CDF69E /* EPUB Player */,
 			);
 		};
 /* End PBXProject section */
@@ -348,7 +348,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		5FBAAC722F9CB28400CDF69E /* Build configuration list for PBXProject "Immersive Reader" */ = {
+		5FBAAC722F9CB28400CDF69E /* Build configuration list for PBXProject "EPUB Player" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				5FBAAC822F9CB28500CDF69E /* Debug */,
@@ -357,7 +357,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		5FBAAC842F9CB28500CDF69E /* Build configuration list for PBXNativeTarget "Immersive Reader" */ = {
+		5FBAAC842F9CB28500CDF69E /* Build configuration list for PBXNativeTarget "EPUB Player" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				5FBAAC852F9CB28500CDF69E /* Debug */,

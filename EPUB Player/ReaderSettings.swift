@@ -18,12 +18,14 @@ nonisolated enum ReaderSettings {
     static let readAloudColorKey = "readerReadAloudColor"
     static let playbackSpeedKey = "readerPlaybackSpeed"
     static let playbackJumpIntervalKey = "readerPlaybackJumpInterval"
+    static let autoRewindAfterBackgroundMinutesKey = "autoRewindAfterBackgroundMinutes"
     static let uploadServerPortKey = "uploadServerPort"
     static let defaultFontSize = 1.2
     static let defaultLineHeight = 1.2
     static let defaultReadAloudColorHex = "#34C759"
     static let defaultPlaybackSpeed = 1.0
     static let defaultPlaybackJumpInterval = 15.0
+    static let defaultAutoRewindAfterBackgroundMinutes = 1
     static let defaultUploadServerPort = 80
     static let fontSizeRange = 0.8 ... 2.0
     static let lineHeightRange = 1.0 ... 2.0
@@ -32,6 +34,7 @@ nonisolated enum ReaderSettings {
     static let lineHeightStep = 0.1
     static let playbackSpeedStep = 0.1
     static let playbackJumpIntervalOptions = [15.0, 30.0, 45.0, 60.0]
+    static let autoRewindAfterBackgroundMinuteOptions = [1, 2, 5, 10]
 
     static let builtInFontFamilyOptions: [FontFamilyOption] = [
         FontFamilyOption(name: "Default", value: nil),
@@ -80,6 +83,10 @@ nonisolated enum ReaderSettings {
         playbackJumpIntervalOptions.min(by: { abs($0 - value) < abs($1 - value) }) ?? defaultPlaybackJumpInterval
     }
 
+    static func normalizedAutoRewindAfterBackgroundMinutes(_ value: Int) -> Int {
+        autoRewindAfterBackgroundMinuteOptions.min(by: { abs($0 - value) < abs($1 - value) }) ?? defaultAutoRewindAfterBackgroundMinutes
+    }
+
     static func normalizedUploadServerPort(_ value: Int) -> Int {
         min(max(value, 1), Int(UInt16.max))
     }
@@ -101,6 +108,11 @@ nonisolated enum ReaderSettings {
         let normalized = normalizedPlaybackJumpInterval(value)
         let wholeSeconds = Int(normalized.rounded())
         return "\(wholeSeconds)s"
+    }
+
+    static func autoRewindAfterBackgroundText(_ value: Int) -> String {
+        let normalized = normalizedAutoRewindAfterBackgroundMinutes(value)
+        return normalized == 1 ? "1 min" : "\(normalized) min"
     }
 
     static func playbackJumpLabel(_ value: Double, direction: PlaybackJumpDirection) -> String {

@@ -17,8 +17,8 @@
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "5FBAAC762F9CB28400CDF69E"
                BuildableName = "ImmersiveReader.app"
-               BlueprintName = "Immersive Reader"
-               ReferencedContainer = "container:Immersive Reader.xcodeproj">
+               BlueprintName = "EPUB Player"
+               ReferencedContainer = "container:EPUB Player.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -47,8 +47,8 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5FBAAC762F9CB28400CDF69E"
             BuildableName = "ImmersiveReader.app"
-            BlueprintName = "Immersive Reader"
-            ReferencedContainer = "container:Immersive Reader.xcodeproj">
+            BlueprintName = "EPUB Player"
+            ReferencedContainer = "container:EPUB Player.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -64,8 +64,8 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5FBAAC762F9CB28400CDF69E"
             BuildableName = "ImmersiveReader.app"
-            BlueprintName = "Immersive Reader"
-            ReferencedContainer = "container:Immersive Reader.xcodeproj">
+            BlueprintName = "EPUB Player"
+            ReferencedContainer = "container:EPUB Player.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>
