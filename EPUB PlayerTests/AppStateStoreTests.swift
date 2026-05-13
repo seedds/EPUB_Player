@@ -47,6 +47,14 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(99), 10)
     }
 
+    func testPlaybackJumpIntervalNormalization() {
+        XCTAssertEqual(ReaderSettings.normalizedPlaybackJumpInterval(15), 15)
+        XCTAssertEqual(ReaderSettings.normalizedPlaybackJumpInterval(22), 15)
+        XCTAssertEqual(ReaderSettings.normalizedPlaybackJumpInterval(37), 30)
+        XCTAssertEqual(ReaderSettings.normalizedPlaybackJumpInterval(52), 45)
+        XCTAssertEqual(ReaderSettings.normalizedPlaybackJumpInterval(99), 60)
+    }
+
     func testAddBook() async throws {
         let store = AppStateStore()
         let book = Book(
