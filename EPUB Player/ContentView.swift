@@ -765,28 +765,17 @@ private struct SettingsNavigationRow<Trailing: View>: View {
 private struct SkipIntervalSettingView: View {
     @Binding var playbackJumpInterval: Double
 
-    private var sliderValue: Binding<Double> {
-        Binding(
-            get: {
-                Double(ReaderSettings.playbackJumpIntervalOptions.firstIndex(of: ReaderSettings.normalizedPlaybackJumpInterval(playbackJumpInterval)) ?? 0)
-            },
-            set: { newValue in
-                let clampedIndex = min(max(Int(newValue.rounded()), 0), ReaderSettings.playbackJumpIntervalOptions.count - 1)
-                playbackJumpInterval = ReaderSettings.playbackJumpIntervalOptions[clampedIndex]
-            }
-        )
-    }
-
     var body: some View {
         Form {
             Section {
-                ReaderSettingSliderRow(
-                    title: "Skip Interval",
-                    valueText: ReaderSettings.playbackJumpIntervalText(playbackJumpInterval),
-                    value: sliderValue,
-                    range: 0 ... Double(ReaderSettings.playbackJumpIntervalOptions.count - 1),
-                    step: 1
-                )
+                ForEach(ReaderSettings.playbackJumpIntervalOptions, id: \.self) { interval in
+                    SettingsSelectionRow(
+                        title: ReaderSettings.playbackJumpIntervalText(interval),
+                        isSelected: interval == ReaderSettings.normalizedPlaybackJumpInterval(playbackJumpInterval)
+                    ) {
+                        playbackJumpInterval = interval
+                    }
+                }
             }
         }
         .navigationTitle("Skip Interval")
