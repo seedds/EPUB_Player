@@ -1,6 +1,6 @@
 //
 //  AppStateStore.swift
-//  Immersive Reader
+//  EPUB Player
 //
 //  Created by OpenCode on 8/5/2026.
 //

@@ -3,7 +3,7 @@
 ## 1. Project Overview
 
 ### What This Project Is
-- `ImmersiveReader` is an iOS/iPadOS EPUB reader built with SwiftUI and Readium.
+- `EPUBPlayer` is an iOS/iPadOS EPUB reader built with SwiftUI and Readium.
 - It focuses on EPUB3 reading, especially media-overlay-driven read-aloud playback with active text highlighting.
 - The app includes a local network upload server, custom font import, persistent reading progress, theme and typography controls, and a document-backed library.
 
@@ -73,7 +73,7 @@
 - Writes to persisted state should be atomic.
 
 ### User Expectations
-- EPUBs should appear in Files under `On My iPhone/ImmersiveReader/Books`.
+- EPUBs should appear in Files under `On My iPhone/EPUBPlayer/Books`.
 - Reader settings, covers, custom fonts, and playback-related cache should persist across app launches.
 - Refresh should not silently destroy the library when stored EPUBs are still present.
 - If state is deleted intentionally, the app should reset cleanly without hidden leftovers.
@@ -89,17 +89,17 @@
 ## 4. Architecture / Structure
 
 ### Main Components
-- `Immersive Reader/Immersive_ReaderApp.swift`
+- `EPUB Player/EPUBPlayerApp.swift`
   - App entry point.
   - Creates and injects a shared `AppStateStore`.
 
-- `Immersive Reader/AppStateStore.swift`
+- `EPUB Player/AppStateStore.swift`
   - Central persisted app state.
   - Stores books, custom font metadata, and reader/upload settings.
   - Reads/writes `Documents/Cache/state.json`.
   - Observes each `Book` and debounces saves.
 
-- `Immersive Reader/AppStorage.swift`
+- `EPUB Player/AppStorage.swift`
   - Defines storage layout and path helpers.
   - Key directories:
     - `Documents/Books/`
@@ -110,54 +110,54 @@
     - `Documents/Cache/Uploads/`
     - `Documents/Cache/Fonts/`
 
-- `Immersive Reader/Book.swift`
+- `EPUB Player/Book.swift`
   - Plain codable observable model for a library book.
   - Holds library metadata, progress state, and media overlay preparation state.
 
-- `Immersive Reader/ContentView.swift`
+- `EPUB Player/ContentView.swift`
   - Top-level tab UI.
   - Contains the Books, Upload, and Settings flows.
   - Starts/resumes media overlay preparation and restores missing covers when app becomes active.
 
-- `Immersive Reader/ReaderView.swift`
+- `EPUB Player/ReaderView.swift`
   - EPUB reading UI built around Readium navigator.
   - Applies theme/typography settings from `AppStateStore`.
   - Coordinates playback, location persistence, chapter navigation, and highlight rendering.
 
-- `Immersive Reader/BookImportService.swift`
+- `EPUB Player/BookImportService.swift`
   - Handles EPUB import, library refresh, cover regeneration, and overlay preparation scheduling.
   - Contains `BookAssetCacheService` and `MediaOverlayPreparationCoordinator`.
 
-- `Immersive Reader/UploadServerController.swift`
+- `EPUB Player/UploadServerController.swift`
   - Owns the upload server state machine and import queue.
   - Handles manual imports and server-driven imports.
   - Exposes library listing, rename, and delete via server callbacks.
 
-- `Immersive Reader/LocalUploadServer.swift`
+- `EPUB Player/LocalUploadServer.swift`
   - Lightweight HTTP server built on `Network.framework`.
   - Serves upload page and simple library API endpoints.
 
-- `Immersive Reader/CustomFontStore.swift`
+- `EPUB Player/CustomFontStore.swift`
   - Imports custom fonts into `Documents/Cache/Fonts`.
   - Stores font family metadata in `AppStateStore`.
   - Registers fonts for UI and produces Readium font declarations.
 
-- `Immersive Reader/ReadiumBookService.swift`
+- `EPUB Player/ReadiumBookService.swift`
   - Opens stored EPUBs using Readium Streamer.
 
-- `Immersive Reader/EPUBMetadataService.swift`
+- `EPUB Player/EPUBMetadataService.swift`
   - Extracts package metadata and cover references from EPUB archives.
 
-- `Immersive Reader/EPUBMediaOverlayService.swift`
+- `EPUB Player/EPUBMediaOverlayService.swift`
   - Parses EPUB media overlay content and writes normalized overlay manifests.
 
-- `Immersive Reader/MediaOverlayPlaybackController.swift`
+- `EPUB Player/MediaOverlayPlaybackController.swift`
   - Loads overlay clip manifests.
   - Materializes audio assets into cache.
   - Controls `AVPlayer` playback, jumping, resume, and auto-advance.
 
 ### How Components Interact
-- `Immersive_ReaderApp` creates `AppStateStore` and injects it into the SwiftUI hierarchy.
+- `EPUBPlayerApp` creates `AppStateStore` and injects it into the SwiftUI hierarchy.
 - `ContentView` reads shared state and hosts the three primary tabs.
 - `BooksView` uses `UploadServerController` for manual import requests and `BookImportService` for refresh.
 - `BookImportService` copies EPUBs into `Documents/Books`, extracts metadata, caches covers, updates `AppStateStore`, and schedules overlay preparation.
@@ -167,8 +167,8 @@
 
 ### Important Files, Folders, Modules, Services, or Systems
 - Repo root:
-  - `Immersive Reader.xcodeproj/`
-  - `Immersive Reader/`
+  - `EPUB Player.xcodeproj/`
+  - `EPUB Player/`
   - `README.md`
   - `build_unsigned.sh`
   - `docs/images/`
@@ -181,7 +181,7 @@
   - `Documents/Cache/state.json`
 
 - Build command:
-  - `xcodebuild -project "Immersive Reader.xcodeproj" -scheme "Immersive Reader" -destination 'generic/platform=iOS Simulator' build`
+  - `xcodebuild -project "EPUB Player.xcodeproj" -scheme "EPUB Player" -destination 'generic/platform=iOS Simulator' build`
 
 ### Dependencies and Integrations
 - SwiftUI for app UI.

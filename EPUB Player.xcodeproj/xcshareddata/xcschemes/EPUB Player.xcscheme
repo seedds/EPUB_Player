@@ -16,8 +16,22 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "5FBAAC762F9CB28400CDF69E"
-               BuildableName = "ImmersiveReader.app"
+               BuildableName = "EPUBPlayer.app"
                BlueprintName = "EPUB Player"
+               ReferencedContainer = "container:EPUB Player.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A1B2C3D40123456789ABCDE8"
+               BuildableName = "EPUB PlayerTests.xctest"
+               BlueprintName = "EPUB PlayerTests"
                ReferencedContainer = "container:EPUB Player.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -29,6 +43,18 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A1B2C3D40123456789ABCDE8"
+               BuildableName = "EPUB PlayerTests.xctest"
+               BlueprintName = "EPUB PlayerTests"
+               ReferencedContainer = "container:EPUB Player.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
@@ -46,7 +72,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5FBAAC762F9CB28400CDF69E"
-            BuildableName = "ImmersiveReader.app"
+            BuildableName = "EPUBPlayer.app"
             BlueprintName = "EPUB Player"
             ReferencedContainer = "container:EPUB Player.xcodeproj">
          </BuildableReference>
@@ -63,7 +89,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5FBAAC762F9CB28400CDF69E"
-            BuildableName = "ImmersiveReader.app"
+            BuildableName = "EPUBPlayer.app"
             BlueprintName = "EPUB Player"
             ReferencedContainer = "container:EPUB Player.xcodeproj">
          </BuildableReference>

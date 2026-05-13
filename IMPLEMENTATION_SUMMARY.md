@@ -7,8 +7,8 @@ This document summarizes the changes implemented based on recommendations 5-10 f
 ### 5. Add persistNow() on app lifecycle events ✅
 
 **Files Modified:**
-- `Immersive Reader/Immersive_ReaderApp.swift`
-- `Immersive Reader/ReaderView.swift`
+- `EPUB Player/EPUBPlayerApp.swift`
+- `EPUB Player/ReaderView.swift`
 
 **Changes:**
 1. Added `@Environment(\.scenePhase)` to track app lifecycle
@@ -25,7 +25,7 @@ This document summarizes the changes implemented based on recommendations 5-10 f
 ### 6. Optimize font registration with caching ✅
 
 **Files Modified:**
-- `Immersive Reader/CustomFontStore.swift`
+- `EPUB Player/CustomFontStore.swift`
 
 **Changes:**
 1. Added `registeredFontURLs: Set<URL>` static property to track registered fonts
@@ -45,7 +45,7 @@ This document summarizes the changes implemented based on recommendations 5-10 f
 ### 4. Implement error cleanup in import service ✅
 
 **Files Modified:**
-- `Immersive Reader/BookImportService.swift`
+- `EPUB Player/BookImportService.swift`
 
 **Changes:**
 1. Wrapped `applyPreparedImport()` call in do-catch block
@@ -67,8 +67,8 @@ This document summarizes the changes implemented based on recommendations 5-10 f
 ### 3. Add documentation for complex algorithms ✅
 
 **Files Modified:**
-- `Immersive Reader/CustomFontStore.swift`
-- `Immersive Reader/MediaOverlayPlaybackController.swift`
+- `EPUB Player/CustomFontStore.swift`
+- `EPUB Player/MediaOverlayPlaybackController.swift`
 
 **Changes:**
 1. Added comprehensive documentation for `detectedFontMetadata()`:
@@ -96,9 +96,9 @@ This document summarizes the changes implemented based on recommendations 5-10 f
 ### 1. Add unit tests for critical paths ✅
 
 **Files Created:**
-- `Immersive ReaderTests/AppStateStoreTests.swift`
-- `Immersive ReaderTests/CustomFontStoreTests.swift`
-- `Immersive ReaderTests/BookImportServiceTests.swift`
+- `EPUB PlayerTests/AppStateStoreTests.swift`
+- `EPUB PlayerTests/CustomFontStoreTests.swift`
+- `EPUB PlayerTests/BookImportServiceTests.swift`
 
 **Changes:**
 1. Created test infrastructure with proper setup/teardown

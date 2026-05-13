@@ -1,6 +1,6 @@
 //
 //  LocalUploadServer.swift
-//  Immersive Reader
+//  EPUB Player
 //
 //  Created by F2PGOD on 25/4/2026.
 //
@@ -46,7 +46,7 @@ final class LocalUploadServer {
     var onDeleteRequested: ((UUID, @escaping APICompletion) -> Void)?
     var onError: ((String) -> Void)?
 
-    private let queue = DispatchQueue(label: "ImmersiveReader.LocalUploadServer")
+    private let queue = DispatchQueue(label: "EPUBPlayer.LocalUploadServer")
     private let queueKey = DispatchSpecificKey<Void>()
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: HTTPUploadConnection] = [:]
@@ -594,7 +594,7 @@ private final class HTTPUploadConnection {
         <html>
         <head>
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Immersive Reader Files</title>
+          <title>EPUB Player Files</title>
           <style>
             :root { color-scheme: light; }
             * { box-sizing: border-box; }
@@ -649,8 +649,8 @@ private final class HTTPUploadConnection {
           <div class="page-drop-overlay">Drop EPUB or font files to start uploading</div>
           <main>
             <header>
-              <h1>Immersive Reader Files</h1>
-              <p>Upload EPUB books or custom font files. Keep Immersive Reader open while managing files.</p>
+              <h1>EPUB Player Files</h1>
+              <p>Upload EPUB books or custom font files. Keep EPUB Player open while managing files.</p>
             </header>
 
             <section>

@@ -1,6 +1,6 @@
-# ImmersiveReader
+# EPUBPlayer
 
-ImmersiveReader is an iOS/iPadOS EPUB reader built with SwiftUI, SwiftData, and Readium.
+EPUBPlayer is an iOS/iPadOS EPUB reader built with SwiftUI, SwiftData, and Readium.
 
 It focuses on EPUB3 reading with synced read-aloud playback, active text highlighting, upload/import workflows, custom font support, reading progress restore, chapter navigation, reader appearance controls, and resume-aware playback.
 
@@ -49,7 +49,7 @@ The app has three tabs:
 - Imported custom fonts are stored in `Documents/Cache/Fonts/`
 - App state, settings, and reading progress are stored in `Documents/Cache/state.json`
 
-Imported EPUBs are intended to appear in the Files app under `On My iPhone/ImmersiveReader/Books`.
+Imported EPUBs are intended to appear in the Files app under `On My iPhone/EPUBPlayer/Books`.
 
 Deleting the app `Documents` folder resets the library, settings, reading progress, custom fonts, and caches.
 
@@ -65,12 +65,12 @@ Deleting the app `Documents` folder resets the library, settings, reading progre
 
 Open the Xcode project:
 
-- `Immersive Reader.xcodeproj`
+- `EPUB Player.xcodeproj`
 
 Or build from the command line:
 
 ```bash
-xcodebuild -project "Immersive Reader.xcodeproj" -scheme "Immersive Reader" -destination 'generic/platform=iOS Simulator' build
+xcodebuild -project "EPUB Player.xcodeproj" -scheme "EPUB Player" -destination 'generic/platform=iOS Simulator' build
 ```
 
 ## Notes

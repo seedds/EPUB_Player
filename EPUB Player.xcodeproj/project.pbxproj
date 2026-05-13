@@ -13,14 +13,30 @@
 		5FBAAC932F9D000100CDF69E /* ReadiumAdapterGCDWebServer in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBAAC8F2F9D000100CDF69E /* ReadiumAdapterGCDWebServer */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		A1B2C3D40123456789ABCDE9 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5FBAAC6F2F9CB28400CDF69E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5FBAAC762F9CB28400CDF69E;
+			remoteInfo = "EPUB Player";
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
-		5FBAAC772F9CB28400CDF69E /* ImmersiveReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ImmersiveReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5FBAAC772F9CB28400CDF69E /* EPUBPlayer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EPUBPlayer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D40123456789ABCDE2 /* EPUB PlayerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "EPUB PlayerTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		5FBAAC792F9CB28400CDF69E /* EPUB Player */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "EPUB Player";
+			sourceTree = "<group>";
+		};
+		A1B2C3D40123456789ABCDE4 /* EPUB PlayerTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "EPUB PlayerTests";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -37,6 +53,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1B2C3D40123456789ABCDE5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -44,6 +67,7 @@
 			isa = PBXGroup;
 			children = (
 				5FBAAC792F9CB28400CDF69E /* EPUB Player */,
+				A1B2C3D40123456789ABCDE4 /* EPUB PlayerTests */,
 				5FBAAC782F9CB28400CDF69E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -51,7 +75,8 @@
 		5FBAAC782F9CB28400CDF69E /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				5FBAAC772F9CB28400CDF69E /* ImmersiveReader.app */,
+				5FBAAC772F9CB28400CDF69E /* EPUBPlayer.app */,
+				A1B2C3D40123456789ABCDE2 /* EPUB PlayerTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -81,9 +106,32 @@
 				5FBAAC8E2F9D000100CDF69E /* ReadiumNavigator */,
 				5FBAAC8F2F9D000100CDF69E /* ReadiumAdapterGCDWebServer */,
 			);
-			productName = "Immersive Reader";
-			productReference = 5FBAAC772F9CB28400CDF69E /* ImmersiveReader.app */;
+			productName = EPUBPlayer;
+			productReference = 5FBAAC772F9CB28400CDF69E /* EPUBPlayer.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A1B2C3D40123456789ABCDE8 /* EPUB PlayerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D40123456789ABCDED /* Build configuration list for PBXNativeTarget "EPUB PlayerTests" */;
+			buildPhases = (
+				A1B2C3D40123456789ABCDE7 /* Sources */,
+				A1B2C3D40123456789ABCDE5 /* Frameworks */,
+				A1B2C3D40123456789ABCDE6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1B2C3D40123456789ABCDEA /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A1B2C3D40123456789ABCDE4 /* EPUB PlayerTests */,
+			);
+			name = "EPUB PlayerTests";
+			packageProductDependencies = (
+			);
+			productName = "EPUB PlayerTests";
+			productReference = A1B2C3D40123456789ABCDE2 /* EPUB PlayerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -97,6 +145,10 @@
 				TargetAttributes = {
 					5FBAAC762F9CB28400CDF69E = {
 						CreatedOnToolsVersion = 26.4.1;
+					};
+					A1B2C3D40123456789ABCDE8 = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = 5FBAAC762F9CB28400CDF69E;
 					};
 				};
 			};
@@ -118,12 +170,20 @@
 			projectRoot = "";
 			targets = (
 				5FBAAC762F9CB28400CDF69E /* EPUB Player */,
+				A1B2C3D40123456789ABCDE8 /* EPUB PlayerTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		5FBAAC752F9CB28400CDF69E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D40123456789ABCDE6 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -140,7 +200,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1B2C3D40123456789ABCDE7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A1B2C3D40123456789ABCDEA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5FBAAC762F9CB28400CDF69E /* EPUB Player */;
+			targetProxy = A1B2C3D40123456789ABCDE9 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		5FBAAC822F9CB28500CDF69E /* Debug */ = {
@@ -280,13 +355,14 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "ImmersiveReader-Info.plist";
+				INFOPLIST_FILE = "EPUBPlayer-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.seedds.epubplayer;
-				PRODUCT_NAME = ImmersiveReader;
+				PRODUCT_MODULE_NAME = EPUBPlayer;
+				PRODUCT_NAME = EPUBPlayer;
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -324,13 +400,14 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "ImmersiveReader-Info.plist";
+				INFOPLIST_FILE = "EPUBPlayer-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.seedds.epubplayer;
-				PRODUCT_NAME = ImmersiveReader;
+				PRODUCT_MODULE_NAME = EPUBPlayer;
+				PRODUCT_NAME = EPUBPlayer;
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -342,6 +419,75 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A1B2C3D40123456789ABCDEB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9LK4YZ82JR;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					XCTest,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.seedds.epubplayerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SUPPORTS_MACCATALYST = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EPUBPlayer.app/EPUBPlayer";
+				TEST_TARGET_NAME = "EPUB Player";
+			};
+			name = Debug;
+		};
+		A1B2C3D40123456789ABCDEC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9LK4YZ82JR;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					XCTest,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.seedds.epubplayerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SUPPORTS_MACCATALYST = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EPUBPlayer.app/EPUBPlayer";
+				TEST_TARGET_NAME = "EPUB Player";
 			};
 			name = Release;
 		};
@@ -362,6 +508,15 @@
 			buildConfigurations = (
 				5FBAAC852F9CB28500CDF69E /* Debug */,
 				5FBAAC862F9CB28500CDF69E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1B2C3D40123456789ABCDED /* Build configuration list for PBXNativeTarget "EPUB PlayerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D40123456789ABCDEB /* Debug */,
+				A1B2C3D40123456789ABCDEC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

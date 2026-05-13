@@ -1,6 +1,6 @@
 //
 //  FontFamilyOption.swift
-//  Immersive Reader
+//  EPUB Player
 //
 //  Created by OpenCode on 30/4/2026.
 //
