@@ -26,6 +26,11 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Allow Immersive Reader to receive EPUB uploads from devices on your local network.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Literata-VariableFont_opsz-wght.ttf</string>
+		<string>Literata-Italic-VariableFont_opsz-wght.ttf</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -33,11 +38,6 @@
 		<key>UISceneConfigurations</key>
 		<dict/>
 	</dict>
-	<key>UIAppFonts</key>
-	<array>
-		<string>Literata-VariableFont_opsz-wght.ttf</string>
-		<string>Literata-Italic-VariableFont_opsz-wght.ttf</string>
-	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIFileSharingEnabled</key>
