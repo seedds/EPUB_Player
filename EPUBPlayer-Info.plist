@@ -25,7 +25,7 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Allow Immersive Reader to receive EPUB uploads from devices on your local network.</string>
+	<string>Allow EPUB Player to receive EPUB uploads from devices on your local network.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Literata-VariableFont_opsz-wght.ttf</string>

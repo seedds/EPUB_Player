@@ -1,12 +1,11 @@
 //
 //  BookImportServiceTests.swift
-//  Immersive ReaderTests
+//  EPUB PlayerTests
 //
-//  Created by Claude on 9/5/2026.
 //
 
 import XCTest
-@testable import Immersive_Reader
+@testable import EPUBPlayer
 
 @MainActor
 final class BookImportServiceTests: XCTestCase {

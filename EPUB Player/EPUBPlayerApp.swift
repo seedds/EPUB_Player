@@ -1,6 +1,6 @@
 //
-//  Immersive_ReaderApp.swift
-//  Immersive Reader
+//  EPUBPlayerApp.swift
+//  EPUB Player
 //
 //  Created by F2PGOD on 25/4/2026.
 //
@@ -11,7 +11,7 @@ import UIKit
 #endif
 
 @main
-struct Immersive_ReaderApp: App {
+struct EPUBPlayerApp: App {
     @StateObject private var appStateStore = AppStateStore()
     @Environment(\.scenePhase) private var scenePhase
 

@@ -1,6 +1,6 @@
 //
 //  ContentView.swift
-//  Immersive Reader
+//  EPUB Player
 //
 //  Created by F2PGOD on 25/4/2026.
 //
@@ -495,7 +495,7 @@ private struct UploadView: View {
                 }
 
                 Section("Storage") {
-                    Text("The server accepts .epub, .ttf, and .otf files. EPUBs are stored in the app's Documents/Books folder and should appear in Files under On My iPhone/ImmersiveReader/Books. Covers, read-aloud cache, uploaded fonts, and app state are stored in Documents/Cache.")
+                    Text("The server accepts .epub, .ttf, and .otf files. EPUBs are stored in the app's Documents/Books folder and should appear in Files under On My iPhone/EPUBPlayer/Books. Covers, read-aloud cache, uploaded fonts, and app state are stored in Documents/Cache.")
                 }
 
                 if !controller.activeUploads.isEmpty {

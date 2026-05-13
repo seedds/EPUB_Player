@@ -1,6 +1,6 @@
 //
 //  Book.swift
-//  Immersive Reader
+//  EPUB Player
 //
 //  Created by F2PGOD on 25/4/2026.
 //
