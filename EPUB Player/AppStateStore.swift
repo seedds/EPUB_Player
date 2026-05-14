@@ -8,6 +8,33 @@
 import Combine
 import Foundation
 
+enum BooksSortOption: String, CaseIterable, Codable, Identifiable {
+    case recentlyAdded
+    case titleAscending
+    case titleDescending
+    case authorAscending
+    case authorDescending
+
+    var id: String {
+        rawValue
+    }
+
+    var name: String {
+        switch self {
+        case .recentlyAdded:
+            return "Recently Added"
+        case .titleAscending:
+            return "Title A-Z"
+        case .titleDescending:
+            return "Title Z-A"
+        case .authorAscending:
+            return "Author A-Z"
+        case .authorDescending:
+            return "Author Z-A"
+        }
+    }
+}
+
 private struct PersistedAppState: Codable {
     var books: [Book]
     var customFontFamilies: [CustomFontStore.ImportedFontFamily]
@@ -20,6 +47,7 @@ private struct PersistedAppState: Codable {
     var playbackJumpInterval: Double
     var autoRewindAfterBackgroundMinutes: Int?
     var uploadServerPort: Int
+    var booksSortOptionRawValue: String
 
     static let `default` = PersistedAppState(
         books: [],
@@ -32,8 +60,37 @@ private struct PersistedAppState: Codable {
         playbackSpeed: ReaderSettings.defaultPlaybackSpeed,
         playbackJumpInterval: ReaderSettings.defaultPlaybackJumpInterval,
         autoRewindAfterBackgroundMinutes: ReaderSettings.defaultAutoRewindAfterBackgroundMinutes,
-        uploadServerPort: ReaderSettings.defaultUploadServerPort
+        uploadServerPort: ReaderSettings.defaultUploadServerPort,
+        booksSortOptionRawValue: BooksSortOption.recentlyAdded.rawValue
     )
+
+    init(
+        books: [Book],
+        customFontFamilies: [CustomFontStore.ImportedFontFamily],
+        fontSize: Double,
+        lineHeight: Double,
+        fontFamilyRawValue: String,
+        themeRawValue: String,
+        readAloudColorRawValue: String,
+        playbackSpeed: Double,
+        playbackJumpInterval: Double,
+        autoRewindAfterBackgroundMinutes: Int?,
+        uploadServerPort: Int,
+        booksSortOptionRawValue: String
+    ) {
+        self.books = books
+        self.customFontFamilies = customFontFamilies
+        self.fontSize = fontSize
+        self.lineHeight = lineHeight
+        self.fontFamilyRawValue = fontFamilyRawValue
+        self.themeRawValue = themeRawValue
+        self.readAloudColorRawValue = readAloudColorRawValue
+        self.playbackSpeed = playbackSpeed
+        self.playbackJumpInterval = playbackJumpInterval
+        self.autoRewindAfterBackgroundMinutes = autoRewindAfterBackgroundMinutes
+        self.uploadServerPort = uploadServerPort
+        self.booksSortOptionRawValue = booksSortOptionRawValue
+    }
 }
 
 @MainActor
@@ -49,6 +106,7 @@ final class AppStateStore: ObservableObject {
     @Published var playbackJumpInterval = ReaderSettings.defaultPlaybackJumpInterval { didSet { scheduleSave() } }
     @Published var autoRewindAfterBackgroundMinutes = ReaderSettings.defaultAutoRewindAfterBackgroundMinutes { didSet { scheduleSave() } }
     @Published var uploadServerPort = ReaderSettings.defaultUploadServerPort { didSet { scheduleSave() } }
+    @Published var booksSortOption = BooksSortOption.recentlyAdded { didSet { scheduleSave() } }
 
     private var bookSubscriptions: [UUID: AnyCancellable] = [:]
     private var saveTask: Task<Void, Never>?
@@ -64,6 +122,12 @@ final class AppStateStore: ObservableObject {
 
     func firstBook(originalFilename: String) -> Book? {
         books.first { $0.originalFilename == originalFilename }
+    }
+
+    var sortedBooks: [Book] {
+        books.sorted { lhs, rhs in
+            isOrderedBefore(lhs, rhs, for: booksSortOption)
+        }
     }
 
     func replaceBooks(_ books: [Book]) {
@@ -124,6 +188,7 @@ final class AppStateStore: ObservableObject {
             persistedState.autoRewindAfterBackgroundMinutes ?? ReaderSettings.defaultAutoRewindAfterBackgroundMinutes
         )
         uploadServerPort = persistedState.uploadServerPort
+        booksSortOption = BooksSortOption(rawValue: persistedState.booksSortOptionRawValue) ?? .recentlyAdded
         configureBookSubscriptions()
     }
 
@@ -137,9 +202,90 @@ final class AppStateStore: ObservableObject {
     private func observeBook(_ book: Book) {
         bookSubscriptions[book.id] = book.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in
+                self?.objectWillChange.send()
                 self?.scheduleSave()
             }
         }
+    }
+
+    private func isOrderedBefore(_ lhs: Book, _ rhs: Book, for option: BooksSortOption) -> Bool {
+        switch option {
+        case .recentlyAdded:
+            return compareRecentlyAdded(lhs, rhs)
+        case .titleAscending:
+            return compareTitle(lhs, rhs, ascending: true)
+        case .titleDescending:
+            return compareTitle(lhs, rhs, ascending: false)
+        case .authorAscending:
+            return compareAuthor(lhs, rhs, ascending: true)
+        case .authorDescending:
+            return compareAuthor(lhs, rhs, ascending: false)
+        }
+    }
+
+    private func compareRecentlyAdded(_ lhs: Book, _ rhs: Book) -> Bool {
+        if let decision = descendingDecision(lhs.importedAt, rhs.importedAt) {
+            return decision
+        }
+        if let decision = ascendingDecision(lhs.title, rhs.title) {
+            return decision
+        }
+        if let decision = ascendingDecision(lhs.author, rhs.author) {
+            return decision
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    private func compareTitle(_ lhs: Book, _ rhs: Book, ascending: Bool) -> Bool {
+        if let decision = stringDecision(lhs.title, rhs.title, ascending: ascending) {
+            return decision
+        }
+        if let decision = ascendingDecision(lhs.author, rhs.author) {
+            return decision
+        }
+        if let decision = descendingDecision(lhs.importedAt, rhs.importedAt) {
+            return decision
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    private func compareAuthor(_ lhs: Book, _ rhs: Book, ascending: Bool) -> Bool {
+        if let decision = stringDecision(lhs.author, rhs.author, ascending: ascending) {
+            return decision
+        }
+        if let decision = ascendingDecision(lhs.title, rhs.title) {
+            return decision
+        }
+        if let decision = descendingDecision(lhs.importedAt, rhs.importedAt) {
+            return decision
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    private func stringDecision(_ lhs: String, _ rhs: String, ascending: Bool) -> Bool? {
+        let comparison = lhs.localizedCaseInsensitiveCompare(rhs)
+        switch comparison {
+        case .orderedAscending:
+            return ascending
+        case .orderedDescending:
+            return !ascending
+        case .orderedSame:
+            return nil
+        }
+    }
+
+    private func ascendingDecision(_ lhs: String, _ rhs: String) -> Bool? {
+        stringDecision(lhs, rhs, ascending: true)
+    }
+
+    private func descendingDecision(_ lhs: Date, _ rhs: Date) -> Bool? {
+        if lhs > rhs {
+            return true
+        }
+        if lhs < rhs {
+            return false
+        }
+        return nil
     }
 
     private func scheduleSave() {
@@ -164,7 +310,8 @@ final class AppStateStore: ObservableObject {
             autoRewindAfterBackgroundMinutes: ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(
                 autoRewindAfterBackgroundMinutes
             ),
-            uploadServerPort: uploadServerPort
+            uploadServerPort: uploadServerPort,
+            booksSortOptionRawValue: booksSortOption.rawValue
         )
 
         guard let data = try? JSONEncoder().encode(persistedState),

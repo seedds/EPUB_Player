@@ -9,24 +9,13 @@ import XCTest
 
 @MainActor
 final class AppStateStoreTests: XCTestCase {
-    var tempStateURL: URL!
-    var originalStateURL: URL!
-
     override func setUp() async throws {
         try await super.setUp()
-
-        // Create temporary state file location
-        tempStateURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("json")
-
-        // Backup original state URL method if needed
-        // Note: This requires making AppStorage.stateURL() configurable for testing
+        resetPersistedState()
     }
 
     override func tearDown() async throws {
-        // Clean up temp files
-        try? FileManager.default.removeItem(at: tempStateURL)
+        resetPersistedState()
         try await super.tearDown()
     }
 
@@ -38,6 +27,7 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.fontSize, ReaderSettings.defaultFontSize)
         XCTAssertEqual(store.lineHeight, ReaderSettings.defaultLineHeight)
         XCTAssertEqual(store.autoRewindAfterBackgroundMinutes, ReaderSettings.defaultAutoRewindAfterBackgroundMinutes)
+        XCTAssertEqual(store.booksSortOption, .recentlyAdded)
     }
 
     func testAutoRewindNormalization() {
@@ -108,6 +98,57 @@ final class AppStateStoreTests: XCTestCase {
 
         XCTAssertEqual(store.books.first?.title, "Book 2", "Most recently imported book should be first")
         XCTAssertEqual(store.books.last?.title, "Book 1")
+        XCTAssertEqual(store.sortedBooks.first?.title, "Book 2")
+        XCTAssertEqual(store.sortedBooks.last?.title, "Book 1")
+    }
+
+    func testBooksSortedByTitleAscending() async throws {
+        let store = AppStateStore()
+
+        store.replaceBooks([
+            makeBook(title: "Zulu", author: "Author C", importedAt: 1000),
+            makeBook(title: "Alpha", author: "Author B", importedAt: 2000),
+            makeBook(title: "Bravo", author: "Author A", importedAt: 3000)
+        ])
+        store.booksSortOption = .titleAscending
+
+        XCTAssertEqual(store.sortedBooks.map(\.title), ["Alpha", "Bravo", "Zulu"])
+    }
+
+    func testBooksSortedByAuthorDescending() async throws {
+        let store = AppStateStore()
+
+        store.replaceBooks([
+            makeBook(title: "Book 1", author: "Author A", importedAt: 1000),
+            makeBook(title: "Book 2", author: "Author C", importedAt: 2000),
+            makeBook(title: "Book 3", author: "Author B", importedAt: 3000)
+        ])
+        store.booksSortOption = .authorDescending
+
+        XCTAssertEqual(store.sortedBooks.map(\.author), ["Author C", "Author B", "Author A"])
+    }
+
+    func testSortOptionPersistsAcrossStoreInstances() async throws {
+        let store = AppStateStore()
+        store.booksSortOption = .titleDescending
+        store.persistNow()
+
+        let reloadedStore = AppStateStore()
+        XCTAssertEqual(reloadedStore.booksSortOption, .titleDescending)
+    }
+
+    func testSortedBooksReflectUpdatedTitle() async throws {
+        let store = AppStateStore()
+        let alpha = makeBook(title: "Alpha", author: "Author A", importedAt: 1000)
+        let bravo = makeBook(title: "Bravo", author: "Author B", importedAt: 2000)
+
+        store.replaceBooks([alpha, bravo])
+        store.booksSortOption = .titleAscending
+        XCTAssertEqual(store.sortedBooks.map(\.title), ["Alpha", "Bravo"])
+
+        bravo.title = "Aaron"
+
+        XCTAssertEqual(store.sortedBooks.map(\.title), ["Aaron", "Alpha"])
     }
 
     func testDebouncedSave() async throws {
@@ -138,5 +179,23 @@ final class AppStateStoreTests: XCTestCase {
 
         // Verify immediate save (would need to check file system)
         // This is a placeholder for actual persistence testing
+    }
+
+    private func resetPersistedState() {
+        guard let stateURL = try? AppStorage.stateURL() else {
+            return
+        }
+        try? FileManager.default.removeItem(at: stateURL)
+    }
+
+    private func makeBook(title: String, author: String, importedAt: TimeInterval) -> Book {
+        let filename = "\(title)-\(author).epub"
+        return Book(
+            title: title,
+            author: author,
+            originalFilename: filename,
+            epubFilePath: AppStorage.storedBookPath(for: filename),
+            importedAt: Date(timeIntervalSince1970: importedAt)
+        )
     }
 }

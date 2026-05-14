@@ -64,7 +64,7 @@ private struct BooksView: View {
 
     var body: some View {
         NavigationStack {
-            let books = store.books
+            let books = store.sortedBooks
             Group {
                 if books.isEmpty {
                     ContentUnavailableView {
@@ -88,13 +88,30 @@ private struct BooksView: View {
                                     selectedBook = book
                                 }
                         }
-                        .onDelete(perform: deleteBooks)
+                        .onDelete { offsets in
+                            deleteBooks(at: offsets, from: books)
+                        }
                     }
                     .listStyle(.plain)
                 }
             }
             .allowsHitTesting(!isBusy)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Picker("Sort Books", selection: $store.booksSortOption) {
+                            ForEach(BooksSortOption.allCases) { option in
+                                Text(option.name)
+                                    .tag(option)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .disabled(store.books.isEmpty)
+                    .accessibilityLabel("Sort Books")
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         refreshBooks()
@@ -162,11 +179,13 @@ private struct BooksView: View {
         }
     }
 
-    private func deleteBooks(at offsets: IndexSet) {
+    private func deleteBooks(at offsets: IndexSet, from books: [Book]) {
         let fileManager = FileManager.default
-        let books = store.books
 
         for index in offsets {
+            guard books.indices.contains(index) else {
+                continue
+            }
             let book = books[index]
             if let epubURL = try? book.resolvedEPUBFileURL() {
                 try? fileManager.removeItem(at: epubURL)
