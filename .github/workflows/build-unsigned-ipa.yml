@@ -82,5 +82,5 @@ jobs:
           target_commitish: ${{ github.sha }}
           prerelease: false
           body_path: release-notes.md
-          files: export/ImmersiveReader-${{ env.APP_VERSION }}-unsigned.ipa
+          files: export/EPUBPlayer-${{ env.APP_VERSION }}-unsigned.ipa
           fail_on_unmatched_files: true
