@@ -9,19 +9,23 @@ import XCTest
 
 @MainActor
 final class AppStateStoreTests: XCTestCase {
+    var tempDocumentsDirectory: URL!
+    var store: AppStateStore!
+
     override func setUp() async throws {
         try await super.setUp()
-        resetPersistedState()
+        tempDocumentsDirectory = try TestDocumentsDirectory.activate()
+        store = AppStateStore()
     }
 
     override func tearDown() async throws {
-        resetPersistedState()
+        store = nil
+        TestDocumentsDirectory.deactivate(rootURL: tempDocumentsDirectory)
+        tempDocumentsDirectory = nil
         try await super.tearDown()
     }
 
     func testInitialState() async throws {
-        let store = AppStateStore()
-
         XCTAssertTrue(store.books.isEmpty, "New store should have no books")
         XCTAssertTrue(store.customFontFamilies.isEmpty, "New store should have no custom fonts")
         XCTAssertEqual(store.fontSize, ReaderSettings.defaultFontSize)
@@ -46,7 +50,6 @@ final class AppStateStoreTests: XCTestCase {
     }
 
     func testAddBook() async throws {
-        let store = AppStateStore()
         let book = Book(
             title: "Test Book",
             author: "Test Author",
@@ -62,7 +65,6 @@ final class AppStateStoreTests: XCTestCase {
     }
 
     func testRemoveBook() async throws {
-        let store = AppStateStore()
         let book = Book(
             title: "Test Book",
             originalFilename: "test.epub",
@@ -77,8 +79,6 @@ final class AppStateStoreTests: XCTestCase {
     }
 
     func testBooksSortedByImportDate() async throws {
-        let store = AppStateStore()
-
         let book1 = Book(
             title: "Book 1",
             originalFilename: "book1.epub",
@@ -152,8 +152,6 @@ final class AppStateStoreTests: XCTestCase {
     }
 
     func testDebouncedSave() async throws {
-        let store = AppStateStore()
-
         // Change multiple properties rapidly
         store.fontSize = 16
         store.fontSize = 18
@@ -167,7 +165,6 @@ final class AppStateStoreTests: XCTestCase {
     }
 
     func testPersistNow() async throws {
-        let store = AppStateStore()
         let book = Book(
             title: "Test Book",
             originalFilename: "test.epub",
@@ -179,13 +176,6 @@ final class AppStateStoreTests: XCTestCase {
 
         // Verify immediate save (would need to check file system)
         // This is a placeholder for actual persistence testing
-    }
-
-    private func resetPersistedState() {
-        guard let stateURL = try? AppStorage.stateURL() else {
-            return
-        }
-        try? FileManager.default.removeItem(at: stateURL)
     }
 
     private func makeBook(title: String, author: String, importedAt: TimeInterval) -> Book {

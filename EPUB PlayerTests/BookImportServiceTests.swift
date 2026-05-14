@@ -10,10 +10,12 @@ import XCTest
 @MainActor
 final class BookImportServiceTests: XCTestCase {
     var tempDirectory: URL!
+    var tempDocumentsDirectory: URL!
     var store: AppStateStore!
 
     override func setUp() async throws {
         try await super.setUp()
+        tempDocumentsDirectory = try TestDocumentsDirectory.activate()
 
         tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -24,6 +26,8 @@ final class BookImportServiceTests: XCTestCase {
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: tempDirectory)
+        TestDocumentsDirectory.deactivate(rootURL: tempDocumentsDirectory)
+        tempDocumentsDirectory = nil
         try await super.tearDown()
     }
 

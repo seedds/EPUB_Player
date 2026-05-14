@@ -9,7 +9,12 @@ import Foundation
 
 enum AppStorage {
     nonisolated static func documentsDirectory() throws -> URL {
-        try FileManager.default.url(
+        if let overridePath = ProcessInfo.processInfo.environment["EPUBPLAYER_DOCUMENTS_DIRECTORY"],
+           !overridePath.isEmpty {
+            return try ensureDirectory(URL(fileURLWithPath: overridePath, isDirectory: true))
+        }
+
+        return try FileManager.default.url(
             for: .documentDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
