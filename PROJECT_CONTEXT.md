@@ -327,7 +327,7 @@
 - Any future feature work should continue respecting the document-only persistence model unless the user explicitly changes that requirement.
 
 ## Reference Snapshot
-- Repository: `https://github.com/seedds/Immersive-Reader.git`
+- Repository: `https://github.com/seedds/EPUB_Player.git`
 - Primary branch: `main`
 - Latest known persistence-refactor commit: `0d9253e` (`Move app persistence into Documents`)
 - Current state when this file was written:
