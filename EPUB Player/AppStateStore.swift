@@ -111,6 +111,10 @@ final class AppStateStore: ObservableObject {
     private var bookSubscriptions: [UUID: AnyCancellable] = [:]
     private var saveTask: Task<Void, Never>?
 
+    deinit {
+        saveTask?.cancel()
+    }
+
     init() {
         loadState()
         CustomFontStore.registerFontsForUI(in: customFontFamilies)

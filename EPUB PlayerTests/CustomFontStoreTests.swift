@@ -10,9 +10,11 @@ import XCTest
 @MainActor
 final class CustomFontStoreTests: XCTestCase {
     var tempFontsDirectory: URL!
+    var tempDocumentsDirectory: URL!
 
     override func setUp() async throws {
         try await super.setUp()
+        tempDocumentsDirectory = try TestDocumentsDirectory.activate()
 
         // Create temporary fonts directory
         tempFontsDirectory = FileManager.default.temporaryDirectory
@@ -23,6 +25,8 @@ final class CustomFontStoreTests: XCTestCase {
     override func tearDown() async throws {
         // Clean up temp directory
         try? FileManager.default.removeItem(at: tempFontsDirectory)
+        TestDocumentsDirectory.deactivate(rootURL: tempDocumentsDirectory)
+        tempDocumentsDirectory = nil
         try await super.tearDown()
     }
 

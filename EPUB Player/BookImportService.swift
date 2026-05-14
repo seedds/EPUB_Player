@@ -226,46 +226,7 @@ enum BookImportService {
                     try await prepareRefreshImport(from: sourceURL, filename: filename, bookID: existingBook?.id ?? UUID())
                 }.value
 
-                if let existingBook {
-                    existingBook.title = preparedImport.metadata.title ?? displayTitle(for: preparedImport.filename)
-                    existingBook.author = preparedImport.metadata.author ?? "Unknown Author"
-                    existingBook.originalFilename = preparedImport.filename
-                    existingBook.epubFilePath = preparedImport.epubFilePath
-                    existingBook.coverImagePath = preparedImport.metadata.coverImagePath
-                    existingBook.language = preparedImport.metadata.language
-                    existingBook.metadataIdentifier = preparedImport.metadata.identifier
-                    existingBook.mediaOverlayJSONPath = preparedImport.mediaOverlayJSONPath
-                    existingBook.mediaOverlayActiveClass = preparedImport.mediaOverlayActiveClass
-                    existingBook.mediaOverlayDuration = preparedImport.mediaOverlayDuration
-                    existingBook.mediaOverlayClipCount = preparedImport.mediaOverlayClipCount
-                    existingBook.mediaOverlayPreparationState = preparedImport.mediaOverlayPreparationState
-                    existingBook.mediaOverlayPreparationError = preparedImport.mediaOverlayPreparationError
-                    existingBook.sourceFileSize = preparedImport.fingerprint.fileSize
-                    existingBook.sourceFileModifiedAt = preparedImport.fingerprint.modifiedAt
-                    existingBook.importedAt = Date()
-                    book = existingBook
-                } else {
-                    let newBook = Book(
-                        id: preparedImport.id,
-                        title: preparedImport.metadata.title ?? displayTitle(for: preparedImport.filename),
-                        author: preparedImport.metadata.author ?? "Unknown Author",
-                        originalFilename: preparedImport.filename,
-                        epubFilePath: preparedImport.epubFilePath,
-                        coverImagePath: preparedImport.metadata.coverImagePath,
-                        language: preparedImport.metadata.language,
-                        metadataIdentifier: preparedImport.metadata.identifier,
-                        mediaOverlayJSONPath: preparedImport.mediaOverlayJSONPath,
-                        mediaOverlayActiveClass: preparedImport.mediaOverlayActiveClass,
-                        mediaOverlayDuration: preparedImport.mediaOverlayDuration,
-                        mediaOverlayClipCount: preparedImport.mediaOverlayClipCount,
-                        mediaOverlayPreparationStateRawValue: preparedImport.mediaOverlayPreparationState.rawValue,
-                        mediaOverlayPreparationError: preparedImport.mediaOverlayPreparationError,
-                        sourceFileSize: preparedImport.fingerprint.fileSize,
-                        sourceFileModifiedAt: preparedImport.fingerprint.modifiedAt
-                    )
-                    store.addBook(newBook)
-                    book = newBook
-                }
+                book = upsertBook(from: preparedImport, existingBook: existingBook, store: store)
 
                 overlayRetryIDs.insert(book.id)
             }
@@ -321,9 +282,24 @@ enum BookImportService {
         existingBookID: UUID?,
         store: AppStateStore
     ) throws -> Book {
-        let book: Book
-        if let existingBookID,
-           let existingBook = bookForID(existingBookID, store: store) {
+        let book = upsertBook(
+            from: preparedImport,
+            existingBook: existingBookID.flatMap { bookForID($0, store: store) },
+            store: store
+        )
+
+        store.sortBooksByImportedAt()
+        store.persistNow()
+        return book
+    }
+
+    @MainActor
+    private static func upsertBook(
+        from preparedImport: PreparedBookImport,
+        existingBook: Book?,
+        store: AppStateStore
+    ) -> Book {
+        if let existingBook {
             existingBook.title = preparedImport.metadata.title ?? displayTitle(for: preparedImport.filename)
             existingBook.author = preparedImport.metadata.author ?? "Unknown Author"
             existingBook.originalFilename = preparedImport.filename
@@ -340,33 +316,29 @@ enum BookImportService {
             existingBook.sourceFileSize = preparedImport.fingerprint.fileSize
             existingBook.sourceFileModifiedAt = preparedImport.fingerprint.modifiedAt
             existingBook.importedAt = Date()
-            book = existingBook
-        } else {
-            let newBook = Book(
-                id: preparedImport.id,
-                title: preparedImport.metadata.title ?? displayTitle(for: preparedImport.filename),
-                author: preparedImport.metadata.author ?? "Unknown Author",
-                originalFilename: preparedImport.filename,
-                epubFilePath: preparedImport.epubFilePath,
-                coverImagePath: preparedImport.metadata.coverImagePath,
-                language: preparedImport.metadata.language,
-                metadataIdentifier: preparedImport.metadata.identifier,
-                mediaOverlayJSONPath: preparedImport.mediaOverlayJSONPath,
-                mediaOverlayActiveClass: preparedImport.mediaOverlayActiveClass,
-                mediaOverlayDuration: preparedImport.mediaOverlayDuration,
-                mediaOverlayClipCount: preparedImport.mediaOverlayClipCount,
-                mediaOverlayPreparationStateRawValue: preparedImport.mediaOverlayPreparationState.rawValue,
-                mediaOverlayPreparationError: preparedImport.mediaOverlayPreparationError,
-                sourceFileSize: preparedImport.fingerprint.fileSize,
-                sourceFileModifiedAt: preparedImport.fingerprint.modifiedAt
-            )
-            store.addBook(newBook)
-            book = newBook
+            return existingBook
         }
 
-        store.sortBooksByImportedAt()
-        store.persistNow()
-        return book
+        let newBook = Book(
+            id: preparedImport.id,
+            title: preparedImport.metadata.title ?? displayTitle(for: preparedImport.filename),
+            author: preparedImport.metadata.author ?? "Unknown Author",
+            originalFilename: preparedImport.filename,
+            epubFilePath: preparedImport.epubFilePath,
+            coverImagePath: preparedImport.metadata.coverImagePath,
+            language: preparedImport.metadata.language,
+            metadataIdentifier: preparedImport.metadata.identifier,
+            mediaOverlayJSONPath: preparedImport.mediaOverlayJSONPath,
+            mediaOverlayActiveClass: preparedImport.mediaOverlayActiveClass,
+            mediaOverlayDuration: preparedImport.mediaOverlayDuration,
+            mediaOverlayClipCount: preparedImport.mediaOverlayClipCount,
+            mediaOverlayPreparationStateRawValue: preparedImport.mediaOverlayPreparationState.rawValue,
+            mediaOverlayPreparationError: preparedImport.mediaOverlayPreparationError,
+            sourceFileSize: preparedImport.fingerprint.fileSize,
+            sourceFileModifiedAt: preparedImport.fingerprint.modifiedAt
+        )
+        store.addBook(newBook)
+        return newBook
     }
 
     nonisolated private static func prepareImport(
