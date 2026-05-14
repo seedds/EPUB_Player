@@ -26,7 +26,7 @@ private struct PersistedAppState: Codable {
         customFontFamilies: [],
         fontSize: ReaderSettings.defaultFontSize,
         lineHeight: ReaderSettings.defaultLineHeight,
-        fontFamilyRawValue: "",
+        fontFamilyRawValue: "Literata",
         themeRawValue: AppThemeOption.system.rawValue,
         readAloudColorRawValue: ReaderSettings.defaultReadAloudColorHex,
         playbackSpeed: ReaderSettings.defaultPlaybackSpeed,

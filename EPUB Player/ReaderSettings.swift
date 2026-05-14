@@ -38,6 +38,7 @@ nonisolated enum ReaderSettings {
 
     static let builtInFontFamilyOptions: [FontFamilyOption] = [
         FontFamilyOption(name: "Default", value: nil),
+        FontFamilyOption(name: "Literata", value: FontFamily(rawValue: "Literata")),
         FontFamilyOption(name: "Palatino", value: .palatino),
         FontFamilyOption(name: "Georgia", value: .georgia),
         FontFamilyOption(name: "Seravek", value: .seravek),
