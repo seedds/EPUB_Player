@@ -15,6 +15,7 @@ ARTIFACT_ROOT="${ARTIFACT_ROOT:-$SCRIPT_DIR/build/testflight/$BUILD_NUMBER}"
 ARCHIVE_PATH="$ARTIFACT_ROOT/$ARCHIVE_PRODUCT_NAME.xcarchive"
 EXPORT_PATH="$ARTIFACT_ROOT/export"
 EXPORT_OPTIONS_PLIST="$ARTIFACT_ROOT/ExportOptions.plist"
+SYSTEM_TOOL_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 
 if [ ! -d "$DEVELOPER_DIR" ]; then
   printf 'Missing Xcode developer directory: %s\n' "$DEVELOPER_DIR" >&2
@@ -74,7 +75,8 @@ DEVELOPER_DIR="$DEVELOPER_DIR" "${archive_command[@]}"
 
 printf 'Uploading archive to App Store Connect\n'
 
-DEVELOPER_DIR="$DEVELOPER_DIR" xcodebuild \
+# Force Apple's rsync during IPA packaging. Homebrew rsync breaks Xcode exportArchive.
+PATH="$SYSTEM_TOOL_PATH:$PATH" DEVELOPER_DIR="$DEVELOPER_DIR" xcodebuild \
   -exportArchive \
   -archivePath "$ARCHIVE_PATH" \
   -exportPath "$EXPORT_PATH" \
