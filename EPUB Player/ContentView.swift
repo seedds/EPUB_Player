@@ -62,78 +62,18 @@ private struct BooksView: View {
     @State private var importError: String?
     @State private var selectedBook: Book?
 
+    private var books: [Book] {
+        store.sortedBooks
+    }
+
     var body: some View {
         NavigationStack {
-            let books = store.sortedBooks
-            Group {
-                if books.isEmpty {
-                    ContentUnavailableView {
-                        Label("No EPUB Books", systemImage: "book.closed")
-                    } description: {
-                        Text("Import EPUB3 books to start building your read-aloud library.")
-                    } actions: {
-                        Button("Import EPUB") {
-                            isImporting = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                } else {
-                    List {
-                        ForEach(books) { book in
-                            BookRow(book: book, showsTopSeparator: book.id == books.first?.id)
-                                .contentShape(Rectangle())
-                                .listRowInsets(EdgeInsets())
-                                .listRowSeparator(.hidden)
-                                .onTapGesture {
-                                    selectedBook = book
-                                }
-                        }
-                        .onDelete { offsets in
-                            deleteBooks(at: offsets, from: books)
-                        }
-                    }
-                    .listStyle(.plain)
-                }
-            }
+            booksContent
             .allowsHitTesting(!isBusy)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Picker("Sort Books", selection: $store.booksSortOption) {
-                            ForEach(BooksSortOption.allCases) { option in
-                                Text(option.name)
-                                    .tag(option)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                    .disabled(store.books.isEmpty)
-                    .accessibilityLabel("Sort Books")
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        refreshBooks()
-                    } label: {
-                        if isRefreshing {
-                            ProgressView()
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                    }
-                    .disabled(isBusy)
-                    .accessibilityLabel("Refresh Books")
-                }
-
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        isImporting = true
-                    } label: {
-                        Label("Import EPUB", systemImage: "plus")
-                    }
-                    .disabled(isBusy)
-                }
+                sortToolbarItem
+                refreshToolbarItem
+                importToolbarItem
             }
             .fileImporter(
                 isPresented: $isImporting,
@@ -144,7 +84,7 @@ private struct BooksView: View {
             .alert(
                 "Import Failed",
                 isPresented: Binding(
-                    get: { importError != nil || controller.manualImportErrorMessage != nil },
+                    get: { isShowingImportError },
                     set: { isPresented in
                         if !isPresented {
                             importError = nil
@@ -155,7 +95,7 @@ private struct BooksView: View {
             ) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text(controller.manualImportErrorMessage ?? importError ?? "Unknown error")
+                Text(importErrorMessage)
             }
             .navigationDestination(item: $selectedBook) { book in
                 ReaderView(book: book)
@@ -167,6 +107,98 @@ private struct BooksView: View {
                     importOverlay
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var booksContent: some View {
+        if books.isEmpty {
+            emptyBooksState
+        } else {
+            booksList
+        }
+    }
+
+    private var emptyBooksState: some View {
+        ContentUnavailableView {
+            Label("No EPUB Books", systemImage: "book.closed")
+        } description: {
+            Text("Import EPUB3 books to start building your read-aloud library.")
+        } actions: {
+            Button("Import EPUB") {
+                isImporting = true
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var booksList: some View {
+        List {
+            ForEach(books) { book in
+                BookRow(book: book, showsTopSeparator: book.id == books.first?.id)
+                    .contentShape(Rectangle())
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .onTapGesture {
+                        selectedBook = book
+                    }
+            }
+            .onDelete { offsets in
+                deleteBooks(at: offsets, from: books)
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    private var isShowingImportError: Bool {
+        importError != nil || controller.manualImportErrorMessage != nil
+    }
+
+    private var importErrorMessage: String {
+        controller.manualImportErrorMessage ?? importError ?? "Unknown error"
+    }
+
+    private var sortToolbarItem: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Menu {
+                Picker("Sort Books", selection: $store.booksSortOption) {
+                    ForEach(BooksSortOption.allCases) { option in
+                        Text(option.name)
+                            .tag(option)
+                    }
+                }
+            } label: {
+                Image(systemName: "arrow.up.arrow.down")
+            }
+            .disabled(store.books.isEmpty)
+            .accessibilityLabel("Sort Books")
+        }
+    }
+
+    private var refreshToolbarItem: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                refreshBooks()
+            } label: {
+                if isRefreshing {
+                    ProgressView()
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+            .disabled(isBusy)
+            .accessibilityLabel("Refresh Books")
+        }
+    }
+
+    private var importToolbarItem: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                isImporting = true
+            } label: {
+                Label("Import EPUB", systemImage: "plus")
+            }
+            .disabled(isBusy)
         }
     }
 

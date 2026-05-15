@@ -63,34 +63,6 @@ private struct PersistedAppState: Codable {
         uploadServerPort: ReaderSettings.defaultUploadServerPort,
         booksSortOptionRawValue: BooksSortOption.recentlyAdded.rawValue
     )
-
-    init(
-        books: [Book],
-        customFontFamilies: [CustomFontStore.ImportedFontFamily],
-        fontSize: Double,
-        lineHeight: Double,
-        fontFamilyRawValue: String,
-        themeRawValue: String,
-        readAloudColorRawValue: String,
-        playbackSpeed: Double,
-        playbackJumpInterval: Double,
-        autoRewindAfterBackgroundMinutes: Int?,
-        uploadServerPort: Int,
-        booksSortOptionRawValue: String
-    ) {
-        self.books = books
-        self.customFontFamilies = customFontFamilies
-        self.fontSize = fontSize
-        self.lineHeight = lineHeight
-        self.fontFamilyRawValue = fontFamilyRawValue
-        self.themeRawValue = themeRawValue
-        self.readAloudColorRawValue = readAloudColorRawValue
-        self.playbackSpeed = playbackSpeed
-        self.playbackJumpInterval = playbackJumpInterval
-        self.autoRewindAfterBackgroundMinutes = autoRewindAfterBackgroundMinutes
-        self.uploadServerPort = uploadServerPort
-        self.booksSortOptionRawValue = booksSortOptionRawValue
-    }
 }
 
 @MainActor
@@ -135,14 +107,14 @@ final class AppStateStore: ObservableObject {
     }
 
     func replaceBooks(_ books: [Book]) {
-        self.books = books.sorted { $0.importedAt > $1.importedAt }
+        self.books = booksSortedByImportedAt(books)
         configureBookSubscriptions()
         scheduleSave()
     }
 
     func addBook(_ book: Book) {
         books.append(book)
-        books.sort { $0.importedAt > $1.importedAt }
+        books = booksSortedByImportedAt(books)
         observeBook(book)
         scheduleSave()
     }
@@ -154,7 +126,7 @@ final class AppStateStore: ObservableObject {
     }
 
     func sortBooksByImportedAt() {
-        books.sort { $0.importedAt > $1.importedAt }
+        books = booksSortedByImportedAt(books)
         scheduleSave()
     }
 
@@ -171,15 +143,22 @@ final class AppStateStore: ObservableObject {
     }
 
     private func loadState() {
-        let persistedState: PersistedAppState
-        if let data = try? Data(contentsOf: try AppStorage.stateURL()),
-           let decodedState = try? JSONDecoder().decode(PersistedAppState.self, from: data) {
-            persistedState = decodedState
-        } else {
-            persistedState = .default
+        applyPersistedState(readPersistedState())
+        configureBookSubscriptions()
+    }
+
+    private func readPersistedState() -> PersistedAppState {
+        guard let data = try? Data(contentsOf: try AppStorage.stateURL()),
+              let persistedState = try? JSONDecoder().decode(PersistedAppState.self, from: data)
+        else {
+            return .default
         }
 
-        books = persistedState.books.sorted { $0.importedAt > $1.importedAt }
+        return persistedState
+    }
+
+    private func applyPersistedState(_ persistedState: PersistedAppState) {
+        books = booksSortedByImportedAt(persistedState.books)
         customFontFamilies = persistedState.customFontFamilies
         fontSize = persistedState.fontSize
         lineHeight = persistedState.lineHeight
@@ -193,7 +172,6 @@ final class AppStateStore: ObservableObject {
         )
         uploadServerPort = persistedState.uploadServerPort
         booksSortOption = BooksSortOption(rawValue: persistedState.booksSortOptionRawValue) ?? .recentlyAdded
-        configureBookSubscriptions()
     }
 
     private func configureBookSubscriptions() {
@@ -292,16 +270,12 @@ final class AppStateStore: ObservableObject {
         return nil
     }
 
-    private func scheduleSave() {
-        saveTask?.cancel()
-        saveTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            self?.writeStateToDisk()
-        }
+    private func booksSortedByImportedAt(_ books: [Book]) -> [Book] {
+        books.sorted { $0.importedAt > $1.importedAt }
     }
 
-    private func writeStateToDisk() {
-        let persistedState = PersistedAppState(
+    private func currentPersistedState() -> PersistedAppState {
+        PersistedAppState(
             books: books,
             customFontFamilies: customFontFamilies,
             fontSize: fontSize,
@@ -317,6 +291,18 @@ final class AppStateStore: ObservableObject {
             uploadServerPort: uploadServerPort,
             booksSortOptionRawValue: booksSortOption.rawValue
         )
+    }
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            self?.writeStateToDisk()
+        }
+    }
+
+    private func writeStateToDisk() {
+        let persistedState = currentPersistedState()
 
         guard let data = try? JSONEncoder().encode(persistedState),
               let stateURL = try? AppStorage.stateURL()
