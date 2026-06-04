@@ -556,7 +556,7 @@ private final class HTTPUploadConnection {
             return nil
         }
 
-        return (bookId, AppStorage.sanitizedFilename(filename))
+        return (bookId, filename)
     }
 
     private func deleteBookId(from target: String) -> UUID? {

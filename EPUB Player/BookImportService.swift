@@ -46,6 +46,7 @@ enum BookImportService {
     }
 
     private struct PreparedBookImport: Sendable {
+        let stagedLibraryFile: StagedLibraryFile
         let id: UUID
         let filename: String
         let epubFilePath: String
@@ -61,6 +62,7 @@ enum BookImportService {
 
     private struct StagedLibraryFile: Sendable {
         let fileURL: URL
+        let destinationURL: URL
         let shouldCleanupOnFailure: Bool
     }
 
@@ -73,11 +75,12 @@ enum BookImportService {
     @discardableResult
     static func importBook(
         from sourceURL: URL,
+        filename requestedFilename: String,
         store: AppStateStore,
         existingBookStrategy: ExistingBookStrategy = .skip,
         progressHandler: (@MainActor @Sendable (ImportProgress) -> Void)? = nil
     ) async throws -> Book? {
-        let filename = AppStorage.sanitizedFilename(sourceURL.lastPathComponent)
+        let filename = AppStorage.sanitizedFilename(requestedFilename)
         guard filename.lowercased().hasSuffix(".epub") else {
             throw BookImportError.notEpub(filename)
         }
@@ -282,6 +285,8 @@ enum BookImportService {
         existingBookID: UUID?,
         store: AppStateStore
     ) throws -> Book {
+        try finalizeStagedLibraryFile(preparedImport.stagedLibraryFile)
+
         let book = upsertBook(
             from: preparedImport,
             existingBook: existingBookID.flatMap { bookForID($0, store: store) },
@@ -291,6 +296,22 @@ enum BookImportService {
         store.sortBooksByImportedAt()
         store.persistNow()
         return book
+    }
+
+    nonisolated private static func finalizeStagedLibraryFile(_ stagedLibraryFile: StagedLibraryFile) throws {
+        let stagedURL = stagedLibraryFile.fileURL
+        let destinationURL = stagedLibraryFile.destinationURL
+        guard stagedURL.standardizedFileURL.path != destinationURL.standardizedFileURL.path else {
+            return
+        }
+
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            _ = try fileManager.replaceItemAt(destinationURL, withItemAt: stagedURL)
+            return
+        }
+
+        try fileManager.moveItem(at: stagedURL, to: destinationURL)
     }
 
     @MainActor
@@ -355,15 +376,18 @@ enum BookImportService {
             progressHandler: progressHandler
         )
 
-        let destinationURL = stagedLibraryFile.fileURL
-        let fingerprint = try sourceFileFingerprint(for: destinationURL)
+        let stagedURL = stagedLibraryFile.fileURL
+        let fingerprint = try sourceFileFingerprint(for: stagedURL)
         if case .skip = existingBookStrategy,
            let existingBook,
-           shouldSkipPreparedBook(for: destinationURL, existingBook: existingBook, fingerprint: fingerprint) {
+           shouldSkipPreparedBook(for: stagedLibraryFile.destinationURL, existingBook: existingBook, fingerprint: fingerprint) {
             await reportImportProgress(
                 ImportProgress(fractionCompleted: 1, message: "Book already exists, skipping"),
                 using: progressHandler
             )
+            if stagedLibraryFile.shouldCleanupOnFailure {
+                try? FileManager.default.removeItem(at: stagedURL)
+            }
             return nil
         }
 
@@ -374,7 +398,7 @@ enum BookImportService {
                 ImportProgress(fractionCompleted: 0.24, message: "Validating EPUB..."),
                 using: progressHandler
             )
-            let archive = try EPUBArchive(url: destinationURL)
+            let archive = try EPUBArchive(url: stagedURL)
             try archive.validateEPUB()
 
             await reportImportProgress(
@@ -397,6 +421,7 @@ enum BookImportService {
                 using: progressHandler
             )
             return PreparedBookImport(
+                stagedLibraryFile: stagedLibraryFile,
                 id: bookID,
                 filename: filename,
                 epubFilePath: AppStorage.storedBookPath(for: filename),
@@ -411,7 +436,7 @@ enum BookImportService {
             )
         } catch {
             if stagedLibraryFile.shouldCleanupOnFailure {
-                try? fileManager.removeItem(at: destinationURL)
+                try? fileManager.removeItem(at: stagedURL)
             }
             throw error
         }
@@ -432,6 +457,10 @@ enum BookImportService {
         let fileManager = FileManager.default
         let libraryDirectory = try AppStorage.booksDirectory()
         let destinationURL = libraryDirectory.appendingPathComponent(filename, isDirectory: false)
+        let stagedURL = libraryDirectory.appendingPathComponent(
+            ".import-\(UUID().uuidString)-\(filename)",
+            isDirectory: false
+        )
         let sourcePath = sourceURL.standardizedFileURL.path
         let destinationPath = destinationURL.standardizedFileURL.path
 
@@ -443,20 +472,24 @@ enum BookImportService {
         let shouldMoveUploadedSource = shouldMoveUploadedSourceIntoLibrary(sourceURL)
 
         guard sourcePath != destinationPath else {
-            return StagedLibraryFile(fileURL: destinationURL, shouldCleanupOnFailure: false)
-        }
-
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            try fileManager.removeItem(at: destinationURL)
+            return StagedLibraryFile(
+                fileURL: destinationURL,
+                destinationURL: destinationURL,
+                shouldCleanupOnFailure: false
+            )
         }
 
         if shouldMoveUploadedSource {
-            try fileManager.moveItem(at: sourceURL, to: destinationURL)
+            try fileManager.moveItem(at: sourceURL, to: stagedURL)
         } else {
-            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            try fileManager.copyItem(at: sourceURL, to: stagedURL)
         }
 
-        return StagedLibraryFile(fileURL: destinationURL, shouldCleanupOnFailure: true)
+        return StagedLibraryFile(
+            fileURL: stagedURL,
+            destinationURL: destinationURL,
+            shouldCleanupOnFailure: true
+        )
     }
 
     nonisolated private static func prepareRefreshImport(
@@ -475,6 +508,11 @@ enum BookImportService {
 
         let fingerprint = try sourceFileFingerprint(for: sourceURL)
         return PreparedBookImport(
+            stagedLibraryFile: StagedLibraryFile(
+                fileURL: sourceURL,
+                destinationURL: sourceURL,
+                shouldCleanupOnFailure: false
+            ),
             id: bookID,
             filename: filename,
             epubFilePath: AppStorage.storedBookPath(for: filename),
@@ -712,8 +750,8 @@ enum BookImportService {
     private static func cleanupPreparedImport(_ preparedImport: PreparedBookImport, bookID: UUID) throws {
         let fileManager = FileManager.default
 
-        if let epubURL = try? AppStorage.bookFileURL(storedPath: preparedImport.epubFilePath) {
-            try? fileManager.removeItem(at: epubURL)
+        if preparedImport.stagedLibraryFile.shouldCleanupOnFailure {
+            try? fileManager.removeItem(at: preparedImport.stagedLibraryFile.fileURL)
         }
 
         if let coverPath = preparedImport.metadata.coverImagePath,

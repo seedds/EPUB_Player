@@ -167,7 +167,7 @@ final class UploadServerController: ObservableObject {
                         filename: filename,
                         kind: self.pendingImportKind(for: filename),
                         source: .upload(uploadID),
-                        existingBookStrategy: .skip
+                        existingBookStrategy: .overwrite
                     )],
                     store: store
                 )
@@ -309,6 +309,7 @@ final class UploadServerController: ObservableObject {
                 case .book:
                     _ = try await BookImportService.importBook(
                         from: pendingImport.sourceURL,
+                        filename: pendingImport.filename,
                         store: store,
                         existingBookStrategy: pendingImport.existingBookStrategy
                     ) { [weak self] progress in
@@ -443,10 +444,7 @@ final class UploadServerController: ObservableObject {
 
     private func renameBook(id: UUID, to requestedFilename: String, store: AppStateStore) throws {
         let book = try findBook(id: id, store: store)
-        let filename = epubFilename(from: requestedFilename)
-        guard !filename.isEmpty else {
-            throw LocalLibraryError.invalidFilename
-        }
+        let filename = try epubFilename(from: requestedFilename)
 
         let fileManager = FileManager.default
         let libraryDirectory = try AppStorage.booksDirectory()
@@ -488,8 +486,16 @@ final class UploadServerController: ObservableObject {
         return book
     }
 
-    private func epubFilename(from filename: String) -> String {
-        let sanitized = AppStorage.sanitizedFilename(filename)
+    private func epubFilename(from filename: String) throws -> String {
+        let trimmedFilename = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedFilename.isEmpty,
+              !trimmedFilename.contains("/"),
+              !trimmedFilename.contains("\\"),
+              let sanitized = AppStorage.sanitizedFilenameOrNil(trimmedFilename)
+        else {
+            throw LocalLibraryError.invalidFilename
+        }
+
         if sanitized.lowercased().hasSuffix(".epub") {
             return sanitized
         }
