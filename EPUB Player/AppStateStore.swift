@@ -65,6 +65,12 @@ private struct PersistedAppState: Codable {
     )
 }
 
+private enum PersistedAppStateLoadResult {
+    case loaded(PersistedAppState)
+    case missing
+    case unreadable
+}
+
 @MainActor
 final class AppStateStore: ObservableObject {
     @Published private(set) var books: [Book] = []
@@ -82,6 +88,8 @@ final class AppStateStore: ObservableObject {
 
     private var bookSubscriptions: [UUID: AnyCancellable] = [:]
     private var saveTask: Task<Void, Never>?
+    private var isHydratingState = false
+    private var canPersistState = true
 
     deinit {
         saveTask?.cancel()
@@ -137,24 +145,52 @@ final class AppStateStore: ObservableObject {
     }
 
     func persistNow() {
+        guard canPersistState else {
+            return
+        }
+
         saveTask?.cancel()
         saveTask = nil
         writeStateToDisk()
     }
 
     private func loadState() {
-        applyPersistedState(readPersistedState())
+        isHydratingState = true
+        defer {
+            isHydratingState = false
+        }
+
+        switch readPersistedState() {
+        case .loaded(let persistedState):
+            canPersistState = true
+            applyPersistedState(persistedState)
+        case .missing:
+            canPersistState = true
+            applyPersistedState(.default)
+        case .unreadable:
+            canPersistState = false
+            applyPersistedState(.default)
+        }
+
         configureBookSubscriptions()
     }
 
-    private func readPersistedState() -> PersistedAppState {
-        guard let data = try? Data(contentsOf: try AppStorage.stateURL()),
-              let persistedState = try? JSONDecoder().decode(PersistedAppState.self, from: data)
-        else {
-            return .default
+    private func readPersistedState() -> PersistedAppStateLoadResult {
+        guard let stateURL = try? AppStorage.stateURL() else {
+            return .unreadable
         }
 
-        return persistedState
+        guard FileManager.default.fileExists(atPath: stateURL.path) else {
+            return .missing
+        }
+
+        guard let data = try? Data(contentsOf: stateURL),
+              let persistedState = try? JSONDecoder().decode(PersistedAppState.self, from: data)
+        else {
+            return .unreadable
+        }
+
+        return .loaded(persistedState)
     }
 
     private func applyPersistedState(_ persistedState: PersistedAppState) {
@@ -294,6 +330,11 @@ final class AppStateStore: ObservableObject {
     }
 
     private func scheduleSave() {
+        guard !isHydratingState else {
+            return
+        }
+
+        canPersistState = true
         saveTask?.cancel()
         saveTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)

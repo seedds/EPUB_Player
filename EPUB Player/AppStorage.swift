@@ -96,14 +96,17 @@ enum AppStorage {
     }
 
     nonisolated static func sanitizedFilename(_ filename: String) -> String {
-        let fallback = "upload.epub"
+        sanitizedFilenameOrNil(filename) ?? "upload.epub"
+    }
+
+    nonisolated static func sanitizedFilenameOrNil(_ filename: String) -> String? {
         let basename = URL(fileURLWithPath: filename).lastPathComponent
         let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " ._-()[]"))
         let sanitized = basename.unicodeScalars.map { scalar in
             allowedCharacters.contains(scalar) ? Character(scalar) : "-"
         }
         let result = String(sanitized).trimmingCharacters(in: .whitespacesAndNewlines)
-        return result.isEmpty ? fallback : result
+        return result.isEmpty ? nil : result
     }
 
     nonisolated static func uniqueFileURL(named filename: String, in directory: URL) -> URL {

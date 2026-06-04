@@ -37,7 +37,11 @@ final class BookImportServiceTests: XCTestCase {
         try "Test content".write(to: textFileURL, atomically: true, encoding: .utf8)
 
         do {
-            _ = try await BookImportService.importBook(from: textFileURL, store: store)
+            _ = try await BookImportService.importBook(
+                from: textFileURL,
+                filename: textFileURL.lastPathComponent,
+                store: store
+            )
             XCTFail("Should have thrown BookImportError.notEpub")
         } catch let error as BookImportError {
             switch error {
