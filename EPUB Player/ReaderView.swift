@@ -631,6 +631,9 @@ struct ReaderView: View {
 
         playback.selectClip(at: restoredIndex, autoplay: false, reason: "restoreLastPlayedClip")
         await navigateToCurrentClip(with: navigator)
+        if let clip = playback.currentClip {
+            currentLocationReference = normalizedReference(for: clip.textResourceHref)
+        }
         applyCurrentClipDecoration(with: navigator)
     }
 
@@ -1452,6 +1455,7 @@ struct ReaderView: View {
         let clipResourceHref = normalizedResourceHref(for: clip.textResourceHref)
         guard currentLocationReference?.resourceHref == clipResourceHref else {
             pendingDecorationClipKey = clipKey
+            navigator.apply(decorations: [], in: mediaOverlayDecorationGroup)
             return
         }
 
