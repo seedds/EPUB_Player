@@ -8,9 +8,18 @@
 @preconcurrency import AVFoundation
 import Combine
 import Foundation
+import MediaPlayer
+import UIKit
 
 @MainActor
 final class MediaOverlayPlaybackController: ObservableObject {
+    private struct NowPlayingSnapshot {
+        let displayTitle: String
+        let displayArtist: String?
+        let elapsedTime: Double
+        let duration: Double
+    }
+
     enum State: Equatable {
         case unavailable
         case ready
@@ -43,10 +52,20 @@ final class MediaOverlayPlaybackController: ObservableObject {
     private var loadedAudioPath: String?
     private var currentBookID: UUID?
     private var currentEPUBURL: URL?
+    private var currentBookTitle: String?
+    private var currentBookAuthor: String?
+    private var currentBookCoverURL: URL?
     private var boundaryObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private var periodicTimeObserver: Any?
     private var currentTransitionID: Int?
     private var jumpAvailabilityRefreshTask: Task<Void, Never>?
+    private var didConfigureRemoteCommands = false
+    private var playCommandTarget: Any?
+    private var pauseCommandTarget: Any?
+    private var togglePlayPauseCommandTarget: Any?
+    private var skipForwardCommandTarget: Any?
+    private var skipBackwardCommandTarget: Any?
 
     var currentClip: EPUBMediaOverlayClip? {
         guard let currentClipIndex, clips.indices.contains(currentClipIndex) else {
@@ -60,11 +79,15 @@ final class MediaOverlayPlaybackController: ObservableObject {
         cachedAudioDurations = [:]
         currentBookID = book.id
         currentEPUBURL = try? book.resolvedEPUBFileURL()
+        currentBookTitle = book.title
+        currentBookAuthor = book.author
+        currentBookCoverURL = try? book.resolvedCoverImageURL()
 
         guard let jsonURL else {
             state = .unavailable
             clips = []
             currentClipIndex = nil
+            clearNowPlayingInfo()
             scheduleRefreshJumpAvailability()
             return
         }
@@ -75,11 +98,13 @@ final class MediaOverlayPlaybackController: ObservableObject {
             }.value
             currentClipIndex = nil
             state = clips.isEmpty ? .unavailable : .ready
+            clearNowPlayingInfo()
             scheduleRefreshJumpAvailability()
         } catch {
             clips = []
             currentClipIndex = nil
             state = .failed(error.localizedDescription)
+            clearNowPlayingInfo()
             scheduleRefreshJumpAvailability()
         }
     }
@@ -121,26 +146,31 @@ final class MediaOverlayPlaybackController: ObservableObject {
     }
 
      func pause(reason: String = "directPause") {
-         player?.pause()
-         currentTransitionID = nil
-         if clips.isEmpty {
-             state = .unavailable
-         } else {
-             state = .paused
-         }
-        deactivateAudioSession(reason: "pause[\(reason)]")
-         scheduleRefreshJumpAvailability()
-     }
+          player?.pause()
+          currentTransitionID = nil
+          if clips.isEmpty {
+              state = .unavailable
+          } else {
+              state = .paused
+          }
+         updateNowPlayingInfo(playbackRateOverride: 0)
+         deactivateAudioSession(reason: "pause[\(reason)]")
+          scheduleRefreshJumpAvailability()
+      }
 
     func stop(reason: String = "directStop") {
         player?.pause()
         removeObservers(reason: "stop[\(reason)]")
+        if let player {
+            removePeriodicTimeObserver(from: player)
+        }
         player = nil
         loadedAudioPath = nil
         deactivateAudioSession(reason: "stop[\(reason)]")
         currentTransitionID = nil
         currentClipIndex = clips.isEmpty ? nil : currentClipIndex
         state = clips.isEmpty ? .unavailable : .ready
+        clearNowPlayingInfo()
         scheduleRefreshJumpAvailability()
     }
 
@@ -171,6 +201,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
             deactivateAudioSession(reason: "nextClip.noNext[\(reason)]")
             currentTransitionID = nil
             state = .ready
+            clearNowPlayingInfo()
             scheduleRefreshJumpAvailability()
             return
         }
@@ -209,6 +240,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
             play(reason: "selectClip[\(reason)]")
         } else {
             state = .paused
+            updateNowPlayingInfo(playbackRateOverride: 0)
             scheduleRefreshJumpAvailability()
         }
     }
@@ -217,10 +249,12 @@ final class MediaOverlayPlaybackController: ObservableObject {
         let normalizedRate = ReaderSettings.normalizedPlaybackSpeed(rate)
         playbackRate = normalizedRate
         applyPlaybackRateIfNeeded(shouldUpdateActiveRate: state.isPlaying, reason: "setPlaybackRate")
+        updateNowPlayingInfo(playbackRateOverride: state.isPlaying ? Float(normalizedRate) : 0)
     }
 
     func setJumpInterval(_ interval: Double) {
         jumpInterval = ReaderSettings.normalizedPlaybackJumpInterval(interval)
+        updateRemoteCommandIntervals()
         scheduleRefreshJumpAvailability()
     }
 
@@ -296,11 +330,13 @@ final class MediaOverlayPlaybackController: ObservableObject {
                             reason: "start[\(reason)]",
                             transitionID: transitionID
                         )
+                        self.updateNowPlayingInfo(playbackRateOverride: Float(self.playbackRate))
                         self.scheduleRefreshJumpAvailability()
                     }
                 }
             } catch {
                 self.state = .failed(error.localizedDescription)
+                self.clearNowPlayingInfo()
                 self.scheduleRefreshJumpAvailability()
             }
         }
@@ -318,13 +354,16 @@ final class MediaOverlayPlaybackController: ObservableObject {
         item.audioTimePitchAlgorithm = .timeDomain
 
         if let player {
+            removePeriodicTimeObserver(from: player)
             player.replaceCurrentItem(with: item)
+            addPeriodicTimeObserver(to: player)
             loadedAudioPath = clip.audioPath
             return player
         }
 
         let player = AVPlayer(playerItem: item)
         self.player = player
+        addPeriodicTimeObserver(to: player)
         loadedAudioPath = clip.audioPath
         return player
     }
@@ -660,12 +699,195 @@ final class MediaOverlayPlaybackController: ObservableObject {
         currentTransitionID = transitionID
         addObservers(for: nextClip, reason: "continueSameAudioWithoutSeek[\(reason)]", transitionID: transitionID)
         state = .playing
+        updateNowPlayingInfo(playbackRateOverride: Float(playbackRate))
         scheduleRefreshJumpAvailability()
         return true
     }
 
     private func isAutomaticAdvanceReason(_ reason: String) -> Bool {
         reason.hasPrefix("boundaryObserver") || reason.hasPrefix("itemEndObserver")
+    }
+
+    private func addPeriodicTimeObserver(to player: AVPlayer) {
+        removePeriodicTimeObserver(from: player)
+        periodicTimeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateNowPlayingInfo()
+            }
+        }
+    }
+
+    private func removePeriodicTimeObserver(from player: AVPlayer) {
+        if let periodicTimeObserver {
+            player.removeTimeObserver(periodicTimeObserver)
+        }
+        periodicTimeObserver = nil
+    }
+
+    private func updateNowPlayingInfo(playbackRateOverride: Float? = nil) {
+        guard let clip = currentClip,
+              let clipIndex = currentClipIndex,
+              let clipID = clipIdentity(for: clip)
+        else {
+            clearNowPlayingInfo()
+            return
+        }
+
+        let activePlaybackRate = playbackRateOverride ?? currentPlaybackRate()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let snapshot = await self.nowPlayingSnapshot(for: clip, clipIndex: clipIndex, clipID: clipID) else {
+                self.clearNowPlayingInfo()
+                return
+            }
+
+            var nowPlayingInfo: [String: Any] = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+            nowPlayingInfo[MPMediaItemPropertyTitle] = snapshot.displayTitle
+            nowPlayingInfo[MPMediaItemPropertyArtist] = snapshot.displayArtist
+            nowPlayingInfo.removeValue(forKey: MPMediaItemPropertyAlbumTitle)
+            nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = activePlaybackRate
+            nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = snapshot.elapsedTime
+            nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = snapshot.duration
+
+            if let artwork = self.nowPlayingArtwork() {
+                nowPlayingInfo[MPMediaItemPropertyArtwork] = artwork
+            } else {
+                nowPlayingInfo.removeValue(forKey: MPMediaItemPropertyArtwork)
+            }
+
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        }
+
+        configureRemoteCommandsIfNeeded()
+        updateRemoteCommandIntervals()
+    }
+
+    private func clearNowPlayingInfo() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    }
+
+    private func currentPlaybackRate() -> Float {
+        state.isPlaying ? Float(playbackRate) : 0
+    }
+
+    private func clipIdentity(for clip: EPUBMediaOverlayClip?) -> String? {
+        guard let clip else {
+            return nil
+        }
+
+        return [
+            clip.audioPath,
+            clip.textResourceHref,
+            clip.fragmentID ?? "",
+            String(clip.clipBegin),
+            String(clip.clipEnd ?? -1)
+        ].joined(separator: "|")
+    }
+
+    private func nowPlayingArtwork() -> MPMediaItemArtwork? {
+        guard let currentBookCoverURL,
+              let image = UIImage(contentsOfFile: currentBookCoverURL.path)
+        else {
+            return nil
+        }
+
+        return MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+    }
+
+    private func nowPlayingSnapshot(
+        for clip: EPUBMediaOverlayClip,
+        clipIndex: Int,
+        clipID: String
+    ) async -> NowPlayingSnapshot? {
+        let timeline = await narratedTimeline()
+        guard currentClipIndex == clipIndex,
+              clipIdentity(for: currentClip) == clipID,
+              let currentEntry = timeline.first(where: { $0.clipIndex == clipIndex })
+        else {
+            return nil
+        }
+
+        let clipOffset = await currentOffsetWithinCurrentClip()
+        guard currentClipIndex == clipIndex,
+              clipIdentity(for: currentClip) == clipID
+        else {
+            return nil
+        }
+
+        let totalDuration = timeline.last?.end ?? 0
+        let elapsedTime = min(max(currentEntry.start + clipOffset, 0), totalDuration)
+        let displayTitle = currentBookTitle ?? "Read Aloud"
+        let displayArtist = currentBookAuthor
+
+        return NowPlayingSnapshot(
+            displayTitle: displayTitle,
+            displayArtist: displayArtist,
+            elapsedTime: elapsedTime,
+            duration: totalDuration
+        )
+    }
+
+    private func configureRemoteCommandsIfNeeded() {
+        guard !didConfigureRemoteCommands else {
+            return
+        }
+
+        let commandCenter = MPRemoteCommandCenter.shared()
+        commandCenter.playCommand.isEnabled = true
+        commandCenter.pauseCommand.isEnabled = true
+        commandCenter.togglePlayPauseCommand.isEnabled = true
+        commandCenter.skipForwardCommand.isEnabled = true
+        commandCenter.skipBackwardCommand.isEnabled = true
+        commandCenter.nextTrackCommand.isEnabled = false
+        commandCenter.previousTrackCommand.isEnabled = false
+
+        playCommandTarget = commandCenter.playCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            self.play(reason: "remote.play")
+            return .success
+        }
+
+        pauseCommandTarget = commandCenter.pauseCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            self.pause(reason: "remote.pause")
+            return .success
+        }
+
+        togglePlayPauseCommandTarget = commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            self.togglePlayback()
+            return .success
+        }
+
+        skipForwardCommandTarget = commandCenter.skipForwardCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.jump(by: self.jumpInterval, reason: "remote.skipForward")
+            }
+            return .success
+        }
+
+        skipBackwardCommandTarget = commandCenter.skipBackwardCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.jump(by: -self.jumpInterval, reason: "remote.skipBackward")
+            }
+            return .success
+        }
+
+        didConfigureRemoteCommands = true
+    }
+
+    private func updateRemoteCommandIntervals() {
+        let interval = NSNumber(value: jumpInterval)
+        let commandCenter = MPRemoteCommandCenter.shared()
+        commandCenter.skipForwardCommand.preferredIntervals = [interval]
+        commandCenter.skipBackwardCommand.preferredIntervals = [interval]
     }
 
     private func configureAudioSession() throws {
@@ -688,7 +910,33 @@ final class MediaOverlayPlaybackController: ObservableObject {
         let player = player
         let boundaryObserver = boundaryObserver
         let endObserver = endObserver
+        let periodicTimeObserver = periodicTimeObserver
+        let playCommandTarget = playCommandTarget
+        let pauseCommandTarget = pauseCommandTarget
+        let togglePlayPauseCommandTarget = togglePlayPauseCommandTarget
+        let skipForwardCommandTarget = skipForwardCommandTarget
+        let skipBackwardCommandTarget = skipBackwardCommandTarget
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         DispatchQueue.main.async {
+            let commandCenter = MPRemoteCommandCenter.shared()
+            if let playCommandTarget {
+                commandCenter.playCommand.removeTarget(playCommandTarget)
+            }
+            if let pauseCommandTarget {
+                commandCenter.pauseCommand.removeTarget(pauseCommandTarget)
+            }
+            if let togglePlayPauseCommandTarget {
+                commandCenter.togglePlayPauseCommand.removeTarget(togglePlayPauseCommandTarget)
+            }
+            if let skipForwardCommandTarget {
+                commandCenter.skipForwardCommand.removeTarget(skipForwardCommandTarget)
+            }
+            if let skipBackwardCommandTarget {
+                commandCenter.skipBackwardCommand.removeTarget(skipBackwardCommandTarget)
+            }
+            if let periodicTimeObserver, let player {
+                player.removeTimeObserver(periodicTimeObserver)
+            }
             if let boundaryObserver, let player {
                 player.removeTimeObserver(boundaryObserver)
             }
