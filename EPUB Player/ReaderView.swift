@@ -177,7 +177,8 @@ struct ReaderView: View {
         let requiredBackgroundDuration = TimeInterval(requiredMinutes * 60)
 
         guard Date().timeIntervalSince(backgroundEnteredAt) >= requiredBackgroundDuration,
-              playback.currentClip != nil
+              playback.currentClip != nil,
+              !playback.state.isPlaying
         else {
             return
         }
