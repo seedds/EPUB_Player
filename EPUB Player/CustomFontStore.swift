@@ -96,10 +96,19 @@ enum CustomFontStore {
         let fileManager = FileManager.default
         var snapshot = synchronizedFamilies(store: store)
         var changedFamilyIDs = Set<UUID>()
+        // The family records are only committed after the loop; any throw must
+        // also remove the files already copied, or they leak untracked.
+        var copiedURLs: [URL] = []
+        func removeCopiedFiles() {
+            for url in copiedURLs {
+                try? fileManager.removeItem(at: url)
+            }
+        }
 
         for sourceURL in urls {
             let originalFilename = AppStorage.sanitizedFilename(sourceURL.lastPathComponent)
             guard isSupportedFontFilename(originalFilename) else {
+                removeCopiedFiles()
                 throw CustomFontStoreError.unsupportedFile(originalFilename)
             }
 
@@ -118,6 +127,7 @@ enum CustomFontStore {
                 }
 
                 try fileManager.copyItem(at: sourceURL, to: destinationURL)
+                copiedURLs.append(destinationURL)
 
                 let metadata = detectedFontMetadata(for: destinationURL, fallbackFilename: originalFilename)
                 let importedFile = ImportedFontFile(
@@ -144,6 +154,7 @@ enum CustomFontStore {
                 }
             } catch {
                 try? fileManager.removeItem(at: destinationURL)
+                removeCopiedFiles()
                 throw error
             }
         }
@@ -166,8 +177,8 @@ enum CustomFontStore {
             .filter { idsToRemove.contains($0.id) }
             .flatMap(\.files)
 
-        try removeStoredFiles(removedFiles)
         unregisterFontsFromCache(removedFiles)
+        try removeStoredFiles(removedFiles)
 
         let remainingFamilies = snapshot.filter { !idsToRemove.contains($0.id) }
         store.setCustomFontFamilies(remainingFamilies)
@@ -186,8 +197,8 @@ enum CustomFontStore {
             .flatMap(\.files)
             .filter { idsToRemove.contains($0.id) }
 
-        try removeStoredFiles(removedFiles)
         unregisterFontsFromCache(removedFiles)
+        try removeStoredFiles(removedFiles)
 
         let remainingFamilies = snapshot.compactMap { family -> ImportedFontFamily? in
             let remainingFiles = family.files.filter { !idsToRemove.contains($0.id) }
@@ -258,6 +269,8 @@ enum CustomFontStore {
 
                 if success {
                     registeredFontURLs.insert(fileURL)
+                } else if let error = registrationError?.takeRetainedValue() {
+                    print("CustomFontStore: failed to register \(file.originalFilename): \(error)")
                 }
             }
         }
@@ -404,6 +417,12 @@ enum CustomFontStore {
 
         for file in files {
             let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+            // Without the OS-level unregistration, a stale process-scope
+            // registration pointing at the deleted file blocks re-importing
+            // the same font until relaunch.
+            if registeredFontURLs.contains(fileURL) {
+                CTFontManagerUnregisterFontsForURL(fileURL as CFURL, .process, nil)
+            }
             registeredFontURLs.remove(fileURL)
         }
     }

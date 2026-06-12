@@ -57,7 +57,7 @@ nonisolated struct EPUBMediaOverlayDocument: Codable {
     }
 }
 
-nonisolated struct EPUBMediaOverlayClip: Codable {
+nonisolated struct EPUBMediaOverlayClip: Codable, Equatable {
     var textHref: String
     var textResourceHref: String
     var fragmentID: String?
@@ -65,6 +65,18 @@ nonisolated struct EPUBMediaOverlayClip: Codable {
     var audioPath: String
     var clipBegin: Double
     var clipEnd: Double?
+
+    // The one canonical identity; ad-hoc field subsets compared at different
+    // call sites had already drifted (one omitted audioPath).
+    var identityKey: String {
+        [
+            audioPath,
+            textResourceHref,
+            fragmentID ?? "",
+            String(clipBegin),
+            String(clipEnd ?? -1)
+        ].joined(separator: "|")
+    }
 
     nonisolated init(
         textHref: String,
@@ -140,6 +152,11 @@ enum EPUBMediaOverlayService {
             EPUBMediaOverlayProgress(fractionCompleted: 0.95, message: "Writing read-aloud data..."),
             using: progressHandler
         )
+        // Cancellation here means the book was deleted mid-parse; writing the
+        // manifest would orphan it in the cache directory.
+        guard !Task.isCancelled else {
+            return nil
+        }
         let data = try encoder.encode(manifest)
         try data.write(to: jsonURL, options: .atomic)
         reportProgress(
@@ -263,12 +280,7 @@ enum EPUBMediaOverlayService {
     }
 
     nonisolated fileprivate static func relativePath(for url: URL, root: URL) -> String? {
-        let path = url.standardizedFileURL.path
-        let rootPath = root.standardizedFileURL.path
-        guard path.hasPrefix(rootPath + "/") else {
-            return nil
-        }
-        return String(path.dropFirst(rootPath.count + 1))
+        AppStorage.relativePath(from: url.path, under: root.path)
     }
 
     nonisolated private static func reportProgress(
@@ -405,7 +417,7 @@ nonisolated private final class SMILParser: NSObject, XMLParserDelegate {
         let fragmentID = fragment(from: href)
         let smilDirectory = smilURL.deletingLastPathComponent()
         guard let fileURL = EPUBMetadataService.resolvedURL(
-            for: href,
+            for: hrefWithoutFragment(href),
             relativeTo: smilDirectory,
             root: rootURL
         ), let resourceHref = EPUBMediaOverlayService.relativePath(for: fileURL, root: rootURL) else {
@@ -427,8 +439,18 @@ nonisolated private final class SMILParser: NSObject, XMLParserDelegate {
 
         return nil
     }
-}
 
-nonisolated private func localName(_ elementName: String) -> String {
-    elementName.split(separator: ":").last.map(String.init)?.lowercased() ?? elementName.lowercased()
+    // resolvedURL only strips literal '#'; a '%23'-encoded fragment would
+    // otherwise percent-decode into the file path.
+    nonisolated private func hrefWithoutFragment(_ href: String) -> String {
+        if let hashIndex = href.lastIndex(of: "#") {
+            return String(href[..<hashIndex])
+        }
+
+        if let encodedRange = href.range(of: "%23", options: .backwards) {
+            return String(href[..<encodedRange.lowerBound])
+        }
+
+        return href
+    }
 }

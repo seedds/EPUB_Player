@@ -47,6 +47,9 @@ final class MediaOverlayPlaybackController: ObservableObject {
     private var playbackRate = ReaderSettings.defaultPlaybackSpeed
     private var jumpInterval = ReaderSettings.defaultPlaybackJumpInterval
     private var cachedAudioDurations: [String: Double] = [:]
+    private var cachedNarratedTimeline: [ClipTimelineEntry]?
+    private var cachedNowPlayingArtwork: MPMediaItemArtwork?
+    private var hasLoadedNowPlayingArtwork = false
 
     private var player: AVPlayer?
     private var loadedAudioPath: String?
@@ -77,6 +80,9 @@ final class MediaOverlayPlaybackController: ObservableObject {
     func load(for book: Book, from jsonURL: URL?) async {
         stop(reason: "load")
         cachedAudioDurations = [:]
+        cachedNarratedTimeline = nil
+        cachedNowPlayingArtwork = nil
+        hasLoadedNowPlayingArtwork = false
         currentBookID = book.id
         currentEPUBURL = try? book.resolvedEPUBFileURL()
         currentBookTitle = book.title
@@ -172,17 +178,6 @@ final class MediaOverlayPlaybackController: ObservableObject {
         state = clips.isEmpty ? .unavailable : .ready
         clearNowPlayingInfo()
         scheduleRefreshJumpAvailability()
-    }
-
-    func previousClip(reason: String = "manualPrevious") {
-        guard let currentClipIndex, currentClipIndex > 0 else {
-            return
-        }
-        self.currentClipIndex = currentClipIndex - 1
-        scheduleRefreshJumpAvailability()
-        if state.isPlaying {
-            play(reason: "previousClip[\(reason)]")
-        }
     }
 
     func nextClip(reason: String = "manualNext") {
@@ -526,6 +521,13 @@ final class MediaOverlayPlaybackController: ObservableObject {
     }
 
     private func narratedTimeline() async -> [ClipTimelineEntry] {
+        // The lock-screen tick calls this twice a second; recomputing the
+        // O(clips) timeline each time burns CPU for an unchanged result. The
+        // cache is invalidated when a new audio duration is learned.
+        if let cachedNarratedTimeline {
+            return cachedNarratedTimeline
+        }
+
         let clipSnapshot = clips
         var entries: [ClipTimelineEntry] = []
         var currentStart = 0.0
@@ -541,6 +543,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
             currentStart = end
         }
 
+        cachedNarratedTimeline = entries
         return entries
     }
 
@@ -583,6 +586,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
            currentItemDuration.isFinite,
            currentItemDuration > 0 {
             cachedAudioDurations[audioPath] = currentItemDuration
+            cachedNarratedTimeline = nil
             return currentItemDuration
         }
 
@@ -606,19 +610,12 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
 
         cachedAudioDurations[audioPath] = assetDuration
+        cachedNarratedTimeline = nil
         return assetDuration
     }
 
     private func isCurrentClip(_ clip: EPUBMediaOverlayClip) -> Bool {
-        guard let currentClip else {
-            return false
-        }
-
-        return currentClip.audioPath == clip.audioPath &&
-            currentClip.textResourceHref == clip.textResourceHref &&
-            currentClip.fragmentID == clip.fragmentID &&
-            currentClip.clipBegin == clip.clipBegin &&
-            currentClip.clipEnd == clip.clipEnd
+        currentClip == clip
     }
 
     private func addObservers(for clip: EPUBMediaOverlayClip, reason: String, transitionID: Int) {
@@ -780,27 +777,26 @@ final class MediaOverlayPlaybackController: ObservableObject {
     }
 
     private func clipIdentity(for clip: EPUBMediaOverlayClip?) -> String? {
-        guard let clip else {
-            return nil
-        }
-
-        return [
-            clip.audioPath,
-            clip.textResourceHref,
-            clip.fragmentID ?? "",
-            String(clip.clipBegin),
-            String(clip.clipEnd ?? -1)
-        ].joined(separator: "|")
+        clip?.identityKey
     }
 
     private func nowPlayingArtwork() -> MPMediaItemArtwork? {
+        // The cover is constant per loaded book; decoding it from disk on
+        // every 0.5 s lock-screen tick wastes CPU and battery.
+        if hasLoadedNowPlayingArtwork {
+            return cachedNowPlayingArtwork
+        }
+        hasLoadedNowPlayingArtwork = true
+
         guard let currentBookCoverURL,
               let image = UIImage(contentsOfFile: currentBookCoverURL.path)
         else {
+            cachedNowPlayingArtwork = nil
             return nil
         }
 
-        return MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        cachedNowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        return cachedNowPlayingArtwork
     }
 
     private func nowPlayingSnapshot(

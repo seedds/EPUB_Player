@@ -29,10 +29,7 @@ enum LocalLibraryError: LocalizedError {
 @MainActor
 final class UploadServerController: ObservableObject {
     private struct PendingImport {
-        enum Kind {
-            case book
-            case customFont
-        }
+        typealias Kind = UploadFileKind
 
         enum Source {
             case upload(UUID)
@@ -160,12 +157,19 @@ final class UploadServerController: ObservableObject {
                     return
                 }
 
+                // The server already rejects unsupported extensions with 415;
+                // this guard keeps the two checks from drifting apart.
+                guard let kind = UploadFileKind(filename: filename) else {
+                    self.markUploadFailed(id: uploadID, filename: filename, message: "Unsupported file type")
+                    return
+                }
+
                 self.setPhase(.importing, forUploadID: uploadID)
                 self.enqueueImports(
                     [PendingImport(
                         sourceURL: fileURL,
                         filename: filename,
-                        kind: self.pendingImportKind(for: filename),
+                        kind: kind,
                         source: .upload(uploadID),
                         existingBookStrategy: .overwrite
                     )],
@@ -477,6 +481,7 @@ final class UploadServerController: ObservableObject {
 
     private func deleteBook(id: UUID, store: AppStateStore) throws {
         let book = try findBook(id: id, store: store)
+        MediaOverlayPreparationCoordinator.shared.cancelPreparation(for: book.id)
         if let epubURL = try? book.resolvedEPUBFileURL() {
             try? FileManager.default.removeItem(at: epubURL)
         }
@@ -509,20 +514,7 @@ final class UploadServerController: ObservableObject {
     }
 
     private func displayTitle(for filename: String) -> String {
-        URL(fileURLWithPath: filename)
-            .deletingPathExtension()
-            .lastPathComponent
-            .replacingOccurrences(of: "_", with: " ")
-    }
-
-    private func pendingImportKind(for filename: String) -> PendingImport.Kind {
-        let pathExtension = URL(fileURLWithPath: filename).pathExtension.lowercased()
-        switch pathExtension {
-        case "ttf", "otf":
-            return .customFont
-        default:
-            return .book
-        }
+        BookImportService.displayTitle(for: filename)
     }
 
     private static func localIPAddress() -> String? {

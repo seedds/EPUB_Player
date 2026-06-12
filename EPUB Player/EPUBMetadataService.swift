@@ -267,8 +267,12 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
                 currentMetadataElement = "media:playback-active-class"
                 currentText = ""
             } else if attributeDict["property"] == "media:duration" {
-                currentMetadataElement = "media:duration"
-                currentText = ""
+                // A refines-scoped duration belongs to one SMIL document; only
+                // the unrefined meta is the publication total.
+                if attributeDict["refines"] == nil {
+                    currentMetadataElement = "media:duration"
+                    currentText = ""
+                }
             } else if attributeDict["property"] == "media:narrator" {
                 currentMetadataElement = "media:narrator"
                 currentText = ""
@@ -334,6 +338,7 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
     }
 }
 
-nonisolated private func localName(_ elementName: String) -> String {
+// Shared by the OPF and SMIL parsers ("smil:par" -> "par").
+nonisolated func localName(_ elementName: String) -> String {
     elementName.split(separator: ":").last.map(String.init)?.lowercased() ?? elementName.lowercased()
 }
