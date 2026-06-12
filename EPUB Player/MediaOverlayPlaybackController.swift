@@ -335,6 +335,12 @@ final class MediaOverlayPlaybackController: ObservableObject {
                     }
                 }
             } catch {
+                // A stale preparation failure must not clobber the state of a
+                // newer clip that is already playing.
+                guard self.isCurrentClip(clip), self.currentTransitionID == transitionID else {
+                    return
+                }
+
                 self.state = .failed(error.localizedDescription)
                 self.clearNowPlayingInfo()
                 self.scheduleRefreshJumpAvailability()

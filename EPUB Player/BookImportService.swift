@@ -151,7 +151,10 @@ enum BookImportService {
             progressHandler: progressHandler
         )
 
-        let existingBooksByFilename = Dictionary(uniqueKeysWithValues: existingBooks.map { ($0.originalFilename, $0) })
+        let existingBooksByFilename = Dictionary(
+            existingBooks.map { ($0.originalFilename, $0) },
+            uniquingKeysWith: { _, newer in newer }
+        )
         let removedBooks = existingBooks.filter { book in
             guard let epubURL = try? book.resolvedEPUBFileURL() else {
                 return true
@@ -178,63 +181,69 @@ enum BookImportService {
 
         var refreshedBooks: [Book] = []
         var overlayRetryIDs: Set<UUID> = []
+        var skippedFilenames: [String] = []
         for (index, sourceURL) in epubURLs.enumerated() {
             let filename = AppStorage.sanitizedFilename(sourceURL.lastPathComponent)
-            guard filename.lowercased().hasSuffix(".epub") else {
-                throw BookImportError.notEpub(filename)
-            }
+            // One unreadable file must not abort the refresh of every other book.
+            do {
+                guard filename.lowercased().hasSuffix(".epub") else {
+                    throw BookImportError.notEpub(filename)
+                }
 
-            let fingerprint = try sourceFileFingerprint(for: sourceURL)
-            let existingBook = existingBooksByFilename[filename]
-            let book: Book
+                let fingerprint = try sourceFileFingerprint(for: sourceURL)
+                let existingBook = existingBooksByFilename[filename]
+                let book: Book
 
-            if let existingBook,
-               shouldSkipPreparedBook(for: sourceURL, existingBook: snapshot(for: existingBook), fingerprint: fingerprint) {
-                let cachedCoverPath: String?
-                if !BookAssetCacheService.hasCachedCover(for: existingBook) {
-                    let coverTask = Task.detached(priority: .utility) {
-                        try regenerateCoverImage(from: sourceURL, bookID: existingBook.id)
+                if let existingBook,
+                   shouldSkipPreparedBook(for: sourceURL, existingBook: snapshot(for: existingBook), fingerprint: fingerprint) {
+                    let cachedCoverPath: String?
+                    if !BookAssetCacheService.hasCachedCover(for: existingBook) {
+                        let coverTask = Task.detached(priority: .utility) {
+                            try regenerateCoverImage(from: sourceURL, bookID: existingBook.id)
+                        }
+                        cachedCoverPath = try await coverTask.value
+                    } else {
+                        cachedCoverPath = nil
                     }
-                    cachedCoverPath = try await coverTask.value
+
+                    if let cachedCoverPath {
+                        existingBook.coverImagePath = cachedCoverPath
+                    }
+
+                    if existingBook.mediaOverlayPreparationState == .processing {
+                        existingBook.mediaOverlayPreparationState = .pending
+                        existingBook.mediaOverlayPreparationError = nil
+                    }
+
+                    if !BookAssetCacheService.hasValidOverlayCache(for: existingBook) &&
+                        (existingBook.mediaOverlayClipCount ?? 0) > 0 {
+                        existingBook.mediaOverlayPreparationState = .pending
+                        existingBook.mediaOverlayPreparationError = nil
+                        existingBook.mediaOverlayJSONPath = nil
+                        existingBook.mediaOverlayActiveClass = nil
+                        existingBook.mediaOverlayDuration = nil
+                        existingBook.mediaOverlayClipCount = nil
+                    }
+
+                    if existingBook.mediaOverlayPreparationState == .pending || existingBook.mediaOverlayPreparationState == .failed {
+                        overlayRetryIDs.insert(existingBook.id)
+                    }
+
+                    book = existingBook
                 } else {
-                    cachedCoverPath = nil
+                    let preparedImport = try await Task.detached(priority: .userInitiated) {
+                        try await prepareRefreshImport(from: sourceURL, filename: filename, bookID: existingBook?.id ?? UUID())
+                    }.value
+
+                    book = upsertBook(from: preparedImport, existingBook: existingBook, store: store)
+
+                    overlayRetryIDs.insert(book.id)
                 }
 
-                if let cachedCoverPath {
-                    existingBook.coverImagePath = cachedCoverPath
-                }
-
-                if existingBook.mediaOverlayPreparationState == .processing {
-                    existingBook.mediaOverlayPreparationState = .pending
-                    existingBook.mediaOverlayPreparationError = nil
-                }
-
-                if !BookAssetCacheService.hasValidOverlayCache(for: existingBook) &&
-                    (existingBook.mediaOverlayClipCount ?? 0) > 0 {
-                    existingBook.mediaOverlayPreparationState = .pending
-                    existingBook.mediaOverlayPreparationError = nil
-                    existingBook.mediaOverlayJSONPath = nil
-                    existingBook.mediaOverlayActiveClass = nil
-                    existingBook.mediaOverlayDuration = nil
-                    existingBook.mediaOverlayClipCount = nil
-                }
-
-                if existingBook.mediaOverlayPreparationState == .pending || existingBook.mediaOverlayPreparationState == .failed {
-                    overlayRetryIDs.insert(existingBook.id)
-                }
-
-                book = existingBook
-            } else {
-                let preparedImport = try await Task.detached(priority: .userInitiated) {
-                    try await prepareRefreshImport(from: sourceURL, filename: filename, bookID: existingBook?.id ?? UUID())
-                }.value
-
-                book = upsertBook(from: preparedImport, existingBook: existingBook, store: store)
-
-                overlayRetryIDs.insert(book.id)
+                refreshedBooks.append(book)
+            } catch {
+                skippedFilenames.append(filename)
             }
-
-            refreshedBooks.append(book)
 
             completedOperations += 1
             await reportRefreshProgress(
@@ -262,8 +271,11 @@ enum BookImportService {
             )
         }
 
+        let completionMessage = skippedFilenames.isEmpty
+            ? "Refresh complete"
+            : "Refresh complete — skipped \(skippedFilenames.count): \(skippedFilenames.joined(separator: ", "))"
         await reportRefreshProgress(
-            RefreshProgress(fractionCompleted: 1, message: "Refresh complete"),
+            RefreshProgress(fractionCompleted: 1, message: completionMessage),
             using: progressHandler
         )
         return refreshedBooks

@@ -455,6 +455,12 @@ final class UploadServerController: ObservableObject {
             throw LocalLibraryError.duplicateFilename(filename)
         }
 
+        // Another book record may hold this filename even if its file is gone
+        // from disk; two records with one filename crashes the next refresh.
+        if store.books.contains(where: { $0.id != book.id && $0.originalFilename == filename }) {
+            throw LocalLibraryError.duplicateFilename(filename)
+        }
+
         if destinationURL.path != sourceURL.path {
             try fileManager.moveItem(at: sourceURL, to: destinationURL)
         }
@@ -534,7 +540,10 @@ final class UploadServerController: ObservableObject {
             let isLoopback = (flags & IFF_LOOPBACK) == IFF_LOOPBACK
             guard isUp, !isLoopback else { continue }
 
-            let addr = interface.pointee.ifa_addr.pointee
+            // getifaddrs can return entries with no address (e.g. interfaces
+            // mid-configuration); ifa_addr is NULL for those.
+            guard let interfaceAddress = interface.pointee.ifa_addr else { continue }
+            let addr = interfaceAddress.pointee
             guard addr.sa_family == UInt8(AF_INET) else { continue }
 
             let name = String(cString: interface.pointee.ifa_name)

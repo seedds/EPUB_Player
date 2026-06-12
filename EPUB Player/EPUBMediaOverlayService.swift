@@ -194,7 +194,15 @@ enum EPUBMediaOverlayService {
         }
 
         if candidates.isEmpty {
-            candidates = smilItemsById.values.map { (nil, $0) }
+            // Dictionary values are unordered; emit SMIL documents in manifest
+            // order so the flattened clip timeline follows reading order.
+            var seenSMILIds: Set<String> = []
+            candidates = package.manifestItems.compactMap { item in
+                guard isSMIL(item), seenSMILIds.insert(item.id).inserted else {
+                    return nil
+                }
+                return (nil, item)
+            }
         }
 
         var documents: [EPUBMediaOverlayDocument] = []
