@@ -23,6 +23,7 @@ enum CustomFontStoreError: LocalizedError {
 
 enum CustomFontStore {
     private static var registeredFontURLs: Set<URL> = []
+    private static var failedRegistrationURLs: Set<URL> = []
     private static let registrationLock = NSLock()
 
     struct ImportedFontFamily: Codable, Identifiable, Hashable, Sendable {
@@ -269,8 +270,12 @@ enum CustomFontStore {
 
                 if success {
                     registeredFontURLs.insert(fileURL)
-                } else if let error = registrationError?.takeRetainedValue() {
-                    print("CustomFontStore: failed to register \(file.originalFilename): \(error)")
+                    failedRegistrationURLs.remove(fileURL)
+                } else {
+                    failedRegistrationURLs.insert(fileURL)
+                    if let error = registrationError?.takeRetainedValue() {
+                        print("CustomFontStore: failed to register \(file.originalFilename): \(error)")
+                    }
                 }
             }
         }
@@ -424,7 +429,30 @@ enum CustomFontStore {
                 CTFontManagerUnregisterFontsForURL(fileURL as CFURL, .process, nil)
             }
             registeredFontURLs.remove(fileURL)
+            failedRegistrationURLs.remove(fileURL)
         }
+    }
+
+    /// A user-facing warning when any of the given families' files could not
+    /// be registered with CoreText — otherwise a broken font is listed as if
+    /// it worked and silently renders fallback glyphs.
+    static func registrationFailureMessage(for families: [ImportedFontFamily]) -> String? {
+        guard let directory = try? AppStorage.customFontsDirectory() else {
+            return nil
+        }
+
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+
+        let failedNames = families.flatMap(\.files).compactMap { file -> String? in
+            let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+            return failedRegistrationURLs.contains(fileURL) ? file.originalFilename : nil
+        }
+        guard !failedNames.isEmpty else {
+            return nil
+        }
+
+        return "Imported, but \(failedNames.joined(separator: ", ")) couldn't be loaded as a font and may not display. Try re-importing a valid font file."
     }
 
     private static func normalizedFamilyKey(_ value: String) -> String {

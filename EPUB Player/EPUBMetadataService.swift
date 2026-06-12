@@ -118,9 +118,9 @@ enum EPUBMetadataService {
         URL(fileURLWithPath: "/virtual-epub-root", isDirectory: true)
     }
 
-    nonisolated static func metadata(at epubURL: URL) throws -> EPUBMetadata {
-        let archive = try EPUBArchive(url: epubURL)
-        guard let package = try packageInfo(in: archive) else {
+    nonisolated static func metadata(at epubURL: URL) async throws -> EPUBMetadata {
+        let archive = try await EPUBArchive(url: epubURL)
+        guard let package = try await packageInfo(in: archive) else {
             return EPUBMetadata()
         }
 
@@ -137,8 +137,8 @@ enum EPUBMetadataService {
         )
     }
 
-    nonisolated static func packageInfo(in archive: EPUBArchive) throws -> EPUBPackageInfo? {
-        guard let containerData = try archive.data(for: "META-INF/container.xml") else {
+    nonisolated static func packageInfo(in archive: EPUBArchive) async throws -> EPUBPackageInfo? {
+        guard let containerData = try await archive.data(for: "META-INF/container.xml") else {
             return nil
         }
 
@@ -146,7 +146,7 @@ enum EPUBMetadataService {
         guard let fullPath = parser.parse(data: containerData),
               let packageURL = resolvedURL(for: fullPath, relativeTo: virtualRootURL, root: virtualRootURL),
               let packagePath = AppStorage.relativePath(from: packageURL.path, under: virtualRootURL.path),
-              let packageData = try archive.data(for: packagePath)
+              let packageData = try await archive.data(for: packagePath)
         else {
             return nil
         }
@@ -154,7 +154,7 @@ enum EPUBMetadataService {
         return OPFParser(packageURL: packageURL).parse(data: packageData)
     }
 
-    nonisolated static func coverImageAsset(in archive: EPUBArchive, package: EPUBPackageInfo) throws -> EPUBArchiveAsset? {
+    nonisolated static func coverImageAsset(in archive: EPUBArchive, package: EPUBPackageInfo) async throws -> EPUBArchiveAsset? {
         guard let coverItem = coverManifestItem(in: package),
               let coverURL = resolvedURL(
                 for: coverItem.href,
@@ -162,7 +162,7 @@ enum EPUBMetadataService {
                 root: virtualRootURL
               ),
               let coverPath = AppStorage.relativePath(from: coverURL.path, under: virtualRootURL.path),
-              let coverData = try archive.data(for: coverPath)
+              let coverData = try await archive.data(for: coverPath)
         else {
             return nil
         }

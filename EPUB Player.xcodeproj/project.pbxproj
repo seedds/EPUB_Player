@@ -11,6 +11,7 @@
 		5FBAAC912F9D000100CDF69E /* ReadiumStreamer in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBAAC8D2F9D000100CDF69E /* ReadiumStreamer */; };
 		5FBAAC922F9D000100CDF69E /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBAAC8E2F9D000100CDF69E /* ReadiumNavigator */; };
 		5FBAAC932F9D000100CDF69E /* ReadiumAdapterGCDWebServer in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBAAC8F2F9D000100CDF69E /* ReadiumAdapterGCDWebServer */; };
+		5FBAACA22F9D000200CDF69E /* ReadiumZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBAACA12F9D000200CDF69E /* ReadiumZIPFoundation */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -50,6 +51,7 @@
 				5FBAAC912F9D000100CDF69E /* ReadiumStreamer in Frameworks */,
 				5FBAAC922F9D000100CDF69E /* ReadiumNavigator in Frameworks */,
 				5FBAAC932F9D000100CDF69E /* ReadiumAdapterGCDWebServer in Frameworks */,
+				5FBAACA22F9D000200CDF69E /* ReadiumZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -105,6 +107,7 @@
 				5FBAAC8D2F9D000100CDF69E /* ReadiumStreamer */,
 				5FBAAC8E2F9D000100CDF69E /* ReadiumNavigator */,
 				5FBAAC8F2F9D000100CDF69E /* ReadiumAdapterGCDWebServer */,
+				5FBAACA12F9D000200CDF69E /* ReadiumZIPFoundation */,
 			);
 			productName = EPUBPlayer;
 			productReference = 5FBAAC772F9CB28400CDF69E /* EPUBPlayer.app */;
@@ -163,6 +166,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				5FBAAC8B2F9D000100CDF69E /* XCRemoteSwiftPackageReference "swift-toolkit" */,
+				5FBAACA02F9D000200CDF69E /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5FBAAC782F9CB28400CDF69E /* Products */;
@@ -538,6 +542,14 @@
 				minimumVersion = 3.8.0;
 			};
 		};
+		5FBAACA02F9D000200CDF69E /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/readium/ZIPFoundation.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.0.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -545,6 +557,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5FBAAC8B2F9D000100CDF69E /* XCRemoteSwiftPackageReference "swift-toolkit" */;
 			productName = ReadiumShared;
+		};
+		5FBAACA12F9D000200CDF69E /* ReadiumZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5FBAACA02F9D000200CDF69E /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ReadiumZIPFoundation;
 		};
 		5FBAAC8D2F9D000100CDF69E /* ReadiumStreamer */ = {
 			isa = XCSwiftPackageProductDependency;

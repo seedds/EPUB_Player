@@ -447,6 +447,9 @@ struct ReaderView: View {
         case .pending, .processing:
             return "Preparing read-aloud..."
         case .failed:
+            if let reason = book.mediaOverlayPreparationError, !reason.isEmpty {
+                return "Read-aloud is unavailable: \(reason) Return to Books and tap Refresh to retry."
+            }
             return "Read-aloud is unavailable for this book. Return to Books and tap Refresh to retry."
         case .ready:
             return nil
@@ -1578,6 +1581,8 @@ private struct MediaOverlayPlaybackBar: View {
                         .frame(width: 48, height: 48)
                         .background(Color(uiColor: .secondarySystemFill), in: Circle())
                 }
+                .accessibilityLabel("Playback speed")
+                .accessibilityValue(ReaderSettings.playbackSpeedText(playbackSpeed))
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
 
@@ -1598,6 +1603,7 @@ private struct MediaOverlayPlaybackBar: View {
                         .background(.blue, in: Circle())
                         .foregroundStyle(.white)
                 }
+                .accessibilityLabel(playback.state.isPlaying ? "Pause read-aloud" : "Play read-aloud")
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
 
@@ -1618,6 +1624,7 @@ private struct MediaOverlayPlaybackBar: View {
                         .frame(width: 48, height: 48)
                         .background(Color(uiColor: .secondarySystemFill), in: Circle())
                 }
+                .accessibilityLabel("Reader settings")
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
             }

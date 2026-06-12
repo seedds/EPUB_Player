@@ -375,7 +375,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
 
         return try await Task.detached(priority: .userInitiated) {
-            try BookAssetCacheService.materializeAudioAsset(
+            try await BookAssetCacheService.materializeAudioAsset(
                 resourcePath: audioPath,
                 bookID: currentBookID,
                 epubURL: currentEPUBURL

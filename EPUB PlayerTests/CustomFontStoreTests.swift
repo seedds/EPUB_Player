@@ -30,43 +30,68 @@ final class CustomFontStoreTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testFontFamilyGrouping() async throws {
-        // This test would require creating actual font files or mocking the font detection
-        // Placeholder for font family grouping logic test
+    // Fake font bytes can't be parsed by CoreText, which exercises the
+    // filename-fallback metadata path deterministically.
+    private func makeFontFile(named filename: String) throws -> URL {
+        let url = tempFontsDirectory.appendingPathComponent(filename, isDirectory: false)
+        try Data("not real font data".utf8).write(to: url)
+        return url
+    }
 
+    func testFontFamilyGroupingAndStyleDetection() async throws {
         let store = AppStateStore()
+        let regular = try makeFontFile(named: "MyFamily-Regular.ttf")
+        let italic = try makeFontFile(named: "MyFamily-Italic.ttf")
+        let other = try makeFontFile(named: "OtherFace.otf")
 
-        // Test that fonts with the same family name are grouped together
-        // Test that regular and italic variants are in the same family
-        // Test that different families are kept separate
+        try CustomFontStore.importFonts(from: [regular, italic, other], store: store)
+
+        let families = store.customFontFamilies
+        XCTAssertEqual(families.count, 2)
+
+        let myFamily = try XCTUnwrap(families.first { $0.displayName == "MyFamily" })
+        XCTAssertEqual(myFamily.files.count, 2, "Regular and italic variants belong to one family")
+        XCTAssertEqual(
+            Set(myFamily.files.map(\.style)),
+            [.normal, .italic],
+            "Style must be detected from the filename when CoreText can't parse the file"
+        )
+
+        let otherFamily = try XCTUnwrap(families.first { $0.displayName == "OtherFace" })
+        XCTAssertEqual(otherFamily.files.count, 1)
     }
 
-    func testFontStyleDetection() async throws {
-        // Test that italic fonts are correctly identified
-        // Test that regular fonts are correctly identified
-        // Test fallback to filename parsing when CoreText fails
-    }
-
-    func testFontRemoval() async throws {
+    func testFontRemovalDeletesRecordsAndFiles() async throws {
         let store = AppStateStore()
+        let font = try makeFontFile(named: "Removable.ttf")
+        try CustomFontStore.importFonts(from: [font], store: store)
+        let familyID = try XCTUnwrap(store.customFontFamilies.first?.id)
 
-        // Test that removing a family removes all its files
-        // Test that removing individual files works
-        // Test that removing the last file in a family removes the family
+        try CustomFontStore.removeFamilies(withIDs: [familyID], store: store)
+
+        XCTAssertTrue(store.customFontFamilies.isEmpty)
+        let fontsDirectory = try AppStorage.customFontsDirectory()
+        let remainingFiles = try FileManager.default.contentsOfDirectory(atPath: fontsDirectory.path)
+        XCTAssertTrue(remainingFiles.isEmpty, "Removing a family must delete its stored files")
     }
 
-    func testFontRegistrationCaching() async throws {
-        // Test that fonts are only registered once
-        // Test that the registration cache is updated on removal
-        // Test thread safety of the registration lock
-    }
-
-    func testSynchronizedFamilies() async throws {
+    func testSynchronizedFamiliesPrunesRecordsForMissingFiles() async throws {
         let store = AppStateStore()
+        let font = try makeFontFile(named: "Vanishing.ttf")
+        try CustomFontStore.importFonts(from: [font], store: store)
+        XCTAssertEqual(store.customFontFamilies.count, 1)
 
-        // Test that missing files are filtered out
-        // Test that families with no remaining files are removed
-        // Test that the selected font family is synchronized
+        // Simulate the stored file disappearing from disk (e.g. cleared cache).
+        let fontsDirectory = try AppStorage.customFontsDirectory()
+        for file in try FileManager.default.contentsOfDirectory(atPath: fontsDirectory.path) {
+            try FileManager.default.removeItem(
+                at: fontsDirectory.appendingPathComponent(file, isDirectory: false)
+            )
+        }
+
+        let families = CustomFontStore.allFamilies(store: store)
+        XCTAssertTrue(families.isEmpty, "Families whose files are gone must be pruned")
+        XCTAssertTrue(store.customFontFamilies.isEmpty)
     }
 
     func testFailedImportRemovesEarlierCopiedFiles() async throws {
