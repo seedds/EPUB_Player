@@ -327,7 +327,10 @@ final class AppStateStore: ObservableObject {
 
     private func observeBook(_ book: Book) {
         bookSubscriptions[book.id] = book.objectWillChange.sink { [weak self] _ in
-            Task { @MainActor in
+            // Books are only mutated on the main actor; forwarding
+            // synchronously lets SwiftUI coalesce the invalidation with the
+            // mutation instead of deferring it a runloop turn.
+            MainActor.assumeIsolated {
                 self?.objectWillChange.send()
                 self?.scheduleSave()
             }

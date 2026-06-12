@@ -62,6 +62,8 @@ final class LocalUploadServer {
             throw LocalUploadServerError.invalidPort
         }
 
+        Self.removeStalePartialUploads()
+
         do {
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
@@ -132,6 +134,24 @@ final class LocalUploadServer {
         uploadConnection.start(queue: queue)
     }
 
+    // Partial uploads left behind by a crash or force-quit are never picked up
+    // again; no live connections exist before the listener starts.
+    private static func removeStalePartialUploads() {
+        guard let uploadsDirectory = try? AppStorage.uploadsDirectory(),
+              let contents = try? FileManager.default.contentsOfDirectory(
+                  at: uploadsDirectory,
+                  includingPropertiesForKeys: nil,
+                  options: []
+              )
+        else {
+            return
+        }
+
+        for fileURL in contents where fileURL.lastPathComponent.hasPrefix(".upload-") {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
     private static func startupError(from error: Error, port: UInt16) -> LocalUploadServerError {
         if isPortInUse(error) {
             return .portInUse(port)
@@ -160,13 +180,26 @@ final class LocalUploadServer {
     }
 }
 
+// Single source of truth for which file types the upload pipeline accepts;
+// the server's 415 check and the controller's import routing must agree.
+enum UploadFileKind {
+    case book
+    case customFont
+
+    init?(filename: String) {
+        switch URL(fileURLWithPath: filename).pathExtension.lowercased() {
+        case "epub":
+            self = .book
+        case "ttf", "otf":
+            self = .customFont
+        default:
+            return nil
+        }
+    }
+}
+
 private final class HTTPUploadConnection {
     typealias APICompletion = LocalUploadServer.APICompletion
-
-    private enum UploadKind {
-        case book
-        case customFont
-    }
 
     var onUploadStarted: ((LocalUploadServer.UploadTransferSnapshot) -> Void)?
     var onUploadProgress: ((LocalUploadServer.UploadTransferSnapshot) -> Void)?
@@ -298,7 +331,7 @@ private final class HTTPUploadConnection {
             return
         }
 
-        guard let filename = filename(from: target), uploadKind(for: filename) != nil else {
+        guard let filename = filename(from: target), UploadFileKind(filename: filename) != nil else {
             finishWithHTTP(status: 415, body: "Only .epub, .ttf, and .otf uploads are supported")
             return
         }
@@ -319,46 +352,30 @@ private final class HTTPUploadConnection {
     }
 
     private func requestBooks() {
-        guard let onBooksRequested else {
-            finishWithHTTP(status: 500, body: "Book listing is not available")
-            return
-        }
-
-        onBooksRequested { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let data):
-                self.finishWithJSON(data)
-            case .failure(let error):
-                self.finishWithHTTP(status: 400, body: error.localizedDescription)
-            }
+        performLibraryRequest(unavailableMessage: "Book listing is not available") { completion in
+            onBooksRequested?(completion)
         }
     }
 
     private func requestRename(bookId: UUID, filename: String) {
-        guard let onRenameRequested else {
-            finishWithHTTP(status: 500, body: "Rename is not available")
-            return
-        }
-
-        onRenameRequested(bookId, filename) { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let data):
-                self.finishWithJSON(data)
-            case .failure(let error):
-                self.finishWithHTTP(status: 400, body: error.localizedDescription)
-            }
+        performLibraryRequest(unavailableMessage: "Rename is not available") { completion in
+            onRenameRequested?(bookId, filename, completion)
         }
     }
 
     private func requestDelete(bookId: UUID) {
-        guard let onDeleteRequested else {
-            finishWithHTTP(status: 500, body: "Delete is not available")
-            return
+        performLibraryRequest(unavailableMessage: "Delete is not available") { completion in
+            onDeleteRequested?(bookId, completion)
         }
+    }
 
-        onDeleteRequested(bookId) { [weak self] result in
+    // One place owns the API response policy: JSON on success, 400 on
+    // failure, 500 when no handler is wired up (invoke returns nil then).
+    private func performLibraryRequest(
+        unavailableMessage: String,
+        invoke: (@escaping APICompletion) -> Void?
+    ) {
+        let completion: APICompletion = { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let data):
@@ -366,6 +383,11 @@ private final class HTTPUploadConnection {
             case .failure(let error):
                 self.finishWithHTTP(status: 400, body: error.localizedDescription)
             }
+        }
+
+        guard invoke(completion) != nil else {
+            finishWithHTTP(status: 500, body: unavailableMessage)
+            return
         }
     }
 
@@ -448,6 +470,7 @@ private final class HTTPUploadConnection {
             let uploadsDirectory = try AppStorage.uploadsDirectory()
             let finalURL = AppStorage.uniqueFileURL(named: uploadFilename, in: uploadsDirectory)
             try FileManager.default.moveItem(at: uploadTempURL, to: finalURL)
+            self.uploadTempURL = nil
             if let snapshot = currentUploadSnapshot() {
                 onUploadProgress?(snapshot)
             }
@@ -497,6 +520,11 @@ private final class HTTPUploadConnection {
     private func cleanup() {
         try? uploadFileHandle?.close()
         uploadFileHandle = nil
+        // A temp URL still set here means the upload never completed (the
+        // success path nils it after moving the file); delete the partial.
+        if let uploadTempURL {
+            try? FileManager.default.removeItem(at: uploadTempURL)
+        }
         uploadTempURL = nil
         uploadFilename = nil
         uploadStartedAt = nil
@@ -1061,15 +1089,4 @@ private final class HTTPUploadConnection {
         """
     }
 
-    private func uploadKind(for filename: String) -> UploadKind? {
-        let pathExtension = URL(fileURLWithPath: filename).pathExtension.lowercased()
-        switch pathExtension {
-        case "epub":
-            return .book
-        case "ttf", "otf":
-            return .customFont
-        default:
-            return nil
-        }
-    }
 }

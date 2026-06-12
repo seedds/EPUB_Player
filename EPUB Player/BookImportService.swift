@@ -22,15 +22,13 @@ enum BookImportError: LocalizedError {
 }
 
 enum BookImportService {
-    struct ImportProgress: Sendable {
+    struct BookOperationProgress: Sendable {
         let fractionCompleted: Double
         let message: String
     }
 
-    struct RefreshProgress: Sendable {
-        let fractionCompleted: Double
-        let message: String
-    }
+    typealias ImportProgress = BookOperationProgress
+    typealias RefreshProgress = BookOperationProgress
 
     private struct SourceFileFingerprint: Sendable, Equatable {
         let fileSize: Int64?
@@ -104,7 +102,7 @@ enum BookImportService {
             return nil
         }
 
-        await reportImportProgress(
+        await reportProgress(
             ImportProgress(fractionCompleted: 0.96, message: "Saving book..."),
             using: progressHandler
         )
@@ -121,7 +119,7 @@ enum BookImportService {
                 priority: .utility
             )
 
-            await reportImportProgress(
+            await reportProgress(
                 ImportProgress(fractionCompleted: 1, message: "Import complete"),
                 using: progressHandler
             )
@@ -138,7 +136,7 @@ enum BookImportService {
         store: AppStateStore,
         progressHandler: (@MainActor @Sendable (RefreshProgress) -> Void)? = nil
     ) async throws -> [Book] {
-        await reportRefreshProgress(
+        await reportProgress(
             RefreshProgress(fractionCompleted: 0.02, message: "Scanning EPUB files..."),
             using: progressHandler
         )
@@ -170,7 +168,7 @@ enum BookImportService {
             store.removeBook(id: book.id)
 
             completedOperations += 1
-            await reportRefreshProgress(
+            await reportProgress(
                 RefreshProgress(
                     fractionCompleted: 0.08 + (Double(completedOperations) / Double(totalOperations)) * 0.84,
                     message: "Removing missing books \(completedOperations) of \(removedBooks.count)"
@@ -246,7 +244,7 @@ enum BookImportService {
             }
 
             completedOperations += 1
-            await reportRefreshProgress(
+            await reportProgress(
                 RefreshProgress(
                     fractionCompleted: 0.08 + (Double(completedOperations) / Double(totalOperations)) * 0.84,
                     message: "Updating library \(index + 1) of \(epubURLs.count)"
@@ -255,7 +253,7 @@ enum BookImportService {
             )
         }
 
-        await reportRefreshProgress(
+        await reportProgress(
             RefreshProgress(fractionCompleted: 0.97, message: "Saving library..."),
             using: progressHandler
         )
@@ -274,7 +272,7 @@ enum BookImportService {
         let completionMessage = skippedFilenames.isEmpty
             ? "Refresh complete"
             : "Refresh complete — skipped \(skippedFilenames.count): \(skippedFilenames.joined(separator: ", "))"
-        await reportRefreshProgress(
+        await reportProgress(
             RefreshProgress(fractionCompleted: 1, message: completionMessage),
             using: progressHandler
         )
@@ -349,6 +347,14 @@ enum BookImportService {
             existingBook.sourceFileSize = preparedImport.fingerprint.fileSize
             existingBook.sourceFileModifiedAt = preparedImport.fingerprint.modifiedAt
             existingBook.importedAt = Date()
+            // The file content changed (this branch only runs on a new
+            // fingerprint), so positions saved against the old content are
+            // invalid.
+            existingBook.lastLocatorJSON = nil
+            existingBook.lastPlayedTextResourceHref = nil
+            existingBook.lastPlayedFragmentID = nil
+            existingBook.lastPlayedClipBegin = nil
+            existingBook.lastPlayedClipEnd = nil
             return existingBook
         }
 
@@ -393,7 +399,7 @@ enum BookImportService {
         if case .skip = existingBookStrategy,
            let existingBook,
            shouldSkipPreparedBook(for: stagedLibraryFile.destinationURL, existingBook: existingBook, fingerprint: fingerprint) {
-            await reportImportProgress(
+            await reportProgress(
                 ImportProgress(fractionCompleted: 1, message: "Book already exists, skipping"),
                 using: progressHandler
             )
@@ -403,55 +409,75 @@ enum BookImportService {
             return nil
         }
 
-        let fileManager = FileManager.default
-
         do {
-            await reportImportProgress(
-                ImportProgress(fractionCompleted: 0.24, message: "Validating EPUB..."),
-                using: progressHandler
+            let preparedImport = try await preparedBookImport(
+                validating: stagedURL,
+                stagedLibraryFile: stagedLibraryFile,
+                filename: filename,
+                bookID: bookID,
+                fingerprint: fingerprint,
+                progressHandler: progressHandler
             )
-            let archive = try EPUBArchive(url: stagedURL)
-            try archive.validateEPUB()
-
-            await reportImportProgress(
-                ImportProgress(fractionCompleted: 0.6, message: "Reading metadata..."),
-                using: progressHandler
-            )
-            let package = try EPUBMetadataService.packageInfo(in: archive)
-            var metadata = package.map(EPUBMetadataService.metadata(from:)) ?? EPUBMetadata()
-
-            await reportImportProgress(
-                ImportProgress(fractionCompleted: 0.8, message: "Caching cover..."),
-                using: progressHandler
-            )
-            metadata.coverImagePath = try cacheCoverImage(from: archive, package: package, bookID: bookID)
-
-            try? BookAssetCacheService.removeOverlayArtifacts(for: bookID)
-
-            await reportImportProgress(
+            await reportProgress(
                 ImportProgress(fractionCompleted: 0.92, message: "Finalizing book..."),
                 using: progressHandler
             )
-            return PreparedBookImport(
-                stagedLibraryFile: stagedLibraryFile,
-                id: bookID,
-                filename: filename,
-                epubFilePath: AppStorage.storedBookPath(for: filename),
-                metadata: metadata,
-                mediaOverlayJSONPath: nil,
-                mediaOverlayActiveClass: nil,
-                mediaOverlayDuration: nil,
-                mediaOverlayClipCount: nil,
-                mediaOverlayPreparationState: .pending,
-                mediaOverlayPreparationError: nil,
-                fingerprint: fingerprint
-            )
+            return preparedImport
         } catch {
             if stagedLibraryFile.shouldCleanupOnFailure {
-                try? fileManager.removeItem(at: stagedURL)
+                try? FileManager.default.removeItem(at: stagedURL)
             }
             throw error
         }
+    }
+
+    // The shared validate/metadata/cover body of the import and refresh
+    // paths; keeping it in one place stops the two from diverging on what a
+    // freshly (re)imported book looks like.
+    nonisolated private static func preparedBookImport(
+        validating fileURL: URL,
+        stagedLibraryFile: StagedLibraryFile,
+        filename: String,
+        bookID: UUID,
+        fingerprint: SourceFileFingerprint,
+        progressHandler: (@MainActor @Sendable (ImportProgress) -> Void)? = nil
+    ) async throws -> PreparedBookImport {
+        await reportProgress(
+            ImportProgress(fractionCompleted: 0.24, message: "Validating EPUB..."),
+            using: progressHandler
+        )
+        let archive = try EPUBArchive(url: fileURL)
+        try archive.validateEPUB()
+
+        await reportProgress(
+            ImportProgress(fractionCompleted: 0.6, message: "Reading metadata..."),
+            using: progressHandler
+        )
+        let package = try EPUBMetadataService.packageInfo(in: archive)
+        var metadata = package.map(EPUBMetadataService.metadata(from:)) ?? EPUBMetadata()
+
+        await reportProgress(
+            ImportProgress(fractionCompleted: 0.8, message: "Caching cover..."),
+            using: progressHandler
+        )
+        metadata.coverImagePath = try cacheCoverImage(from: archive, package: package, bookID: bookID)
+
+        try? BookAssetCacheService.removeOverlayArtifacts(for: bookID)
+
+        return PreparedBookImport(
+            stagedLibraryFile: stagedLibraryFile,
+            id: bookID,
+            filename: filename,
+            epubFilePath: AppStorage.storedBookPath(for: filename),
+            metadata: metadata,
+            mediaOverlayJSONPath: nil,
+            mediaOverlayActiveClass: nil,
+            mediaOverlayDuration: nil,
+            mediaOverlayClipCount: nil,
+            mediaOverlayPreparationState: .pending,
+            mediaOverlayPreparationError: nil,
+            fingerprint: fingerprint
+        )
     }
 
     nonisolated private static func stageSourceFileInLibrary(
@@ -476,7 +502,7 @@ enum BookImportService {
         let sourcePath = sourceURL.standardizedFileURL.path
         let destinationPath = destinationURL.standardizedFileURL.path
 
-        await reportImportProgress(
+        await reportProgress(
             ImportProgress(fractionCompleted: 0.08, message: "Staging EPUB..."),
             using: progressHandler
         )
@@ -509,32 +535,16 @@ enum BookImportService {
         filename: String,
         bookID: UUID
     ) async throws -> PreparedBookImport {
-        let archive = try EPUBArchive(url: sourceURL)
-        try archive.validateEPUB()
-
-        let package = try EPUBMetadataService.packageInfo(in: archive)
-        var metadata = package.map(EPUBMetadataService.metadata(from:)) ?? EPUBMetadata()
-        metadata.coverImagePath = try cacheCoverImage(from: archive, package: package, bookID: bookID)
-
-        try? BookAssetCacheService.removeOverlayArtifacts(for: bookID)
-
         let fingerprint = try sourceFileFingerprint(for: sourceURL)
-        return PreparedBookImport(
+        return try await preparedBookImport(
+            validating: sourceURL,
             stagedLibraryFile: StagedLibraryFile(
                 fileURL: sourceURL,
                 destinationURL: sourceURL,
                 shouldCleanupOnFailure: false
             ),
-            id: bookID,
             filename: filename,
-            epubFilePath: AppStorage.storedBookPath(for: filename),
-            metadata: metadata,
-            mediaOverlayJSONPath: nil,
-            mediaOverlayActiveClass: nil,
-            mediaOverlayDuration: nil,
-            mediaOverlayClipCount: nil,
-            mediaOverlayPreparationState: .pending,
-            mediaOverlayPreparationError: nil,
+            bookID: bookID,
             fingerprint: fingerprint
         )
     }
@@ -561,16 +571,16 @@ enum BookImportService {
         return try BookAssetCacheService.cacheCoverImage(asset: coverAsset, for: bookID)
     }
 
-    nonisolated private static func reportRefreshProgress(
-        _ progress: RefreshProgress,
-        using progressHandler: (@MainActor @Sendable (RefreshProgress) -> Void)?
+    nonisolated private static func reportProgress(
+        _ progress: BookOperationProgress,
+        using progressHandler: (@MainActor @Sendable (BookOperationProgress) -> Void)?
     ) async {
         guard let progressHandler else {
             return
         }
 
         await progressHandler(
-            RefreshProgress(
+            BookOperationProgress(
                 fractionCompleted: min(max(progress.fractionCompleted, 0), 1),
                 message: progress.message
             )
@@ -630,27 +640,11 @@ enum BookImportService {
             throw BookImportError.libraryFilesUnavailable
         }
 
-        await reportRefreshProgress(
+        await reportProgress(
             RefreshProgress(fractionCompleted: 0.05, message: "Rebuilding library from saved book paths..."),
             using: progressHandler
         )
         return fallbackEPUBURLs
-    }
-
-    nonisolated private static func reportImportProgress(
-        _ progress: ImportProgress,
-        using progressHandler: (@MainActor @Sendable (ImportProgress) -> Void)?
-    ) async {
-        guard let progressHandler else {
-            return
-        }
-
-        await progressHandler(
-            ImportProgress(
-                fractionCompleted: min(max(progress.fractionCompleted, 0), 1),
-                message: progress.message
-            )
-        )
     }
 
     nonisolated private static func shouldSkipPreparedBook(
@@ -744,7 +738,7 @@ enum BookImportService {
         return sourcePath == uploadsPath || sourcePath.hasPrefix(uploadsPath + "/")
     }
 
-    private static func displayTitle(for filename: String) -> String {
+    static func displayTitle(for filename: String) -> String {
         URL(fileURLWithPath: filename)
             .deletingPathExtension()
             .lastPathComponent
@@ -939,13 +933,20 @@ final class MediaOverlayPreparationCoordinator {
                         self?.publishProgress(Self.preparationProgress(from: progress), for: bookID)
                     }
                 }
-                let result = try await Task.detached(priority: priority) {
+                // Detached tasks don't inherit cancellation; forward it so a
+                // deleted book's parse stops instead of re-writing its cache.
+                let parseTask = Task.detached(priority: priority) {
                     try EPUBMediaOverlayService.parseAndWrite(
                         at: sourceURL,
                         bookID: bookID,
                         progressHandler: progressHandler
                     )
-                }.value
+                }
+                let result = try await withTaskCancellationHandler {
+                    try await parseTask.value
+                } onCancel: {
+                    parseTask.cancel()
+                }
 
                 guard let updatedBook = self?.fetchBook(id: bookID, store: store) else {
                     return
@@ -980,6 +981,11 @@ final class MediaOverlayPreparationCoordinator {
                 store.persistNow()
             }
         }
+    }
+
+    func cancelPreparation(for bookID: UUID) {
+        tasks[bookID]?.cancel()
+        tasks.removeValue(forKey: bookID)
     }
 
     func ensurePreparedForPlayback(

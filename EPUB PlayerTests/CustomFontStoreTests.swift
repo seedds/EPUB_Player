@@ -68,4 +68,25 @@ final class CustomFontStoreTests: XCTestCase {
         // Test that families with no remaining files are removed
         // Test that the selected font family is synchronized
     }
+
+    func testFailedImportRemovesEarlierCopiedFiles() async throws {
+        let store = AppStateStore()
+
+        let supportedFont = tempFontsDirectory.appendingPathComponent("MyFont.ttf", isDirectory: false)
+        try Data("not really font data".utf8).write(to: supportedFont)
+        let unsupportedFile = tempFontsDirectory.appendingPathComponent("notes.txt", isDirectory: false)
+        try Data("hello".utf8).write(to: unsupportedFile)
+
+        do {
+            try CustomFontStore.importFonts(from: [supportedFont, unsupportedFile], store: store)
+            XCTFail("Importing an unsupported file should throw")
+        } catch {
+            // expected
+        }
+
+        let fontsDirectory = try AppStorage.customFontsDirectory()
+        let remainingFiles = try FileManager.default.contentsOfDirectory(atPath: fontsDirectory.path)
+        XCTAssertTrue(remainingFiles.isEmpty, "A failed batch import must not orphan files copied in earlier iterations")
+        XCTAssertTrue(store.customFontFamilies.isEmpty, "No families should be recorded for a failed import")
+    }
 }

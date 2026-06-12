@@ -79,7 +79,7 @@ struct ReaderView: View {
             await openBook()
         }
         .onDisappear {
-            persistLastPlayedClip()
+            persistLastPlayedClip(immediately: true)
             isPlaybackSpeedControlPresented = false
             isReaderSettingsControlPresented = false
             lastHandledPlaybackStartClipKey = nil
@@ -153,7 +153,7 @@ struct ReaderView: View {
         case .background:
             backgroundEnteredAt = Date()
             if playback.currentClip != nil {
-                persistLastPlayedClip()
+                persistLastPlayedClip(immediately: true)
             }
         case .active:
             await handleAutoRewindIfNeeded()
@@ -354,23 +354,11 @@ struct ReaderView: View {
         if !playback.clips.isEmpty {
             MediaOverlayPlaybackBar(
                 playback: playback,
-                playbackSpeed: Binding(
-                    get: { store.playbackSpeed },
-                    set: { store.playbackSpeed = $0 }
-                ),
+                playbackSpeed: $store.playbackSpeed,
                 playbackJumpInterval: store.playbackJumpInterval,
-                fontSize: Binding(
-                    get: { store.fontSize },
-                    set: { store.fontSize = $0 }
-                ),
-                lineHeight: Binding(
-                    get: { store.lineHeight },
-                    set: { store.lineHeight = $0 }
-                ),
-                fontFamilyRawValue: Binding(
-                    get: { store.fontFamilyRawValue },
-                    set: { store.fontFamilyRawValue = $0 }
-                ),
+                fontSize: $store.fontSize,
+                lineHeight: $store.lineHeight,
+                fontFamilyRawValue: $store.fontFamilyRawValue,
                 customFontFamilies: customFontFamilies,
                 isSpeedControlPresented: $isPlaybackSpeedControlPresented,
                 isReaderSettingsControlPresented: $isReaderSettingsControlPresented,
@@ -601,13 +589,20 @@ struct ReaderView: View {
 
     @MainActor
     private func saveLocation(_ locator: Locator) {
+        // Mutating the book already schedules a debounced save; a synchronous
+        // full-state write per scroll tick would hitch the main thread.
         book.lastLocatorJSON = locator.jsonString
         book.lastOpenedAt = Date()
-        store.persistNow()
     }
 
     @MainActor
-    private func persistLastPlayedClip() {
+    private func persistLastPlayedClip(immediately: Bool = false) {
+        defer {
+            if immediately {
+                store.persistNow()
+            }
+        }
+
         guard let clip = playback.currentClip else {
             // A nil clip before restore has run means the book is still
             // opening, not that the user cleared playback — keep the saved
@@ -620,7 +615,6 @@ struct ReaderView: View {
             book.lastPlayedFragmentID = nil
             book.lastPlayedClipBegin = nil
             book.lastPlayedClipEnd = nil
-            store.persistNow()
             return
         }
 
@@ -628,7 +622,6 @@ struct ReaderView: View {
         book.lastPlayedFragmentID = clip.fragmentID
         book.lastPlayedClipBegin = clip.clipBegin
         book.lastPlayedClipEnd = clip.clipEnd
-        store.persistNow()
     }
 
     @MainActor
@@ -831,6 +824,17 @@ struct ReaderView: View {
             return exactMatch
         }
 
+        // Clip hrefs are fragment-stripped at creation, so a fragment reference
+        // (e.g. a TOC entry into the middle of a file) must match on the clip's
+        // own fragmentID, not fall through to the file's first clip.
+        if let fragmentID = chapterReference.fragmentID,
+           let fragmentMatch = playback.clips.firstIndex(where: { clip in
+               normalizedResourceHref(for: clip.textResourceHref) == chapterReference.resourceHref &&
+               clip.fragmentID == fragmentID
+           }) {
+            return fragmentMatch
+        }
+
         return playback.clips.firstIndex(where: { clip in
             normalizedResourceHref(for: clip.textResourceHref) == chapterReference.resourceHref
         })
@@ -908,10 +912,7 @@ struct ReaderView: View {
     }
 
     private func playbackStartClipKey(for clip: EPUBMediaOverlayClip) -> String {
-        let resourceHref = normalizedResourceHref(for: clip.textResourceHref)
-        let fragmentID = clip.fragmentID ?? ""
-        let clipEnd = clip.clipEnd.map { String($0) } ?? "nil"
-        return "\(resourceHref)|\(fragmentID)|\(clip.clipBegin)|\(clipEnd)"
+        clip.identityKey
     }
 
     private var activeChapterItemID: ChapterListItem.ID? {
@@ -1244,6 +1245,14 @@ struct ReaderView: View {
         return fragmentIDs
     }
 
+    private enum PlayableViewportPosition: String, CaseIterable {
+        // Declaration order is the playback-start preference: a visible
+        // fragment first, then the nearest one above, then the next one below.
+        case inViewport
+        case before
+        case after
+    }
+
     @MainActor
     private func resolvedPlaybackStartClipIndex(with navigator: EPUBNavigatorViewController) async -> Int? {
         guard let visibleLocator = await navigator.firstVisibleElementLocator() else {
@@ -1253,40 +1262,21 @@ struct ReaderView: View {
         let visibleResourceHref = normalizedResourceHref(for: visibleLocator.href.string)
         let playableIDs = playableFragmentIDs(for: visibleResourceHref)
 
-        if !playableIDs.isEmpty,
-           let visibleFragmentID = await firstPlayableFragmentIDInViewport(
-            fragmentIDs: playableIDs,
-            navigator: navigator
-           ),
-            let visibleClipIndex = exactClipIndex(for: EPUBReference(
-            resourceHref: visibleResourceHref,
-            fragmentID: visibleFragmentID
-              )) {
-            return visibleClipIndex
-        }
+        if !playableIDs.isEmpty {
+            let positionedFragmentIDs = await playableFragmentIDsByViewportPosition(
+                fragmentIDs: playableIDs,
+                navigator: navigator
+            )
 
-        if !playableIDs.isEmpty,
-           let beforeFragmentID = await firstPlayableFragmentIDBeforeViewport(
-            fragmentIDs: playableIDs,
-            navigator: navigator
-           ),
-           let beforeClipIndex = exactClipIndex(for: EPUBReference(
-            resourceHref: visibleResourceHref,
-            fragmentID: beforeFragmentID
-              )) {
-            return beforeClipIndex
-        }
-
-        if !playableIDs.isEmpty,
-           let forwardFragmentID = await firstPlayableFragmentIDAfterViewport(
-            fragmentIDs: playableIDs,
-            navigator: navigator
-           ),
-           let forwardClipIndex = exactClipIndex(for: EPUBReference(
-            resourceHref: visibleResourceHref,
-            fragmentID: forwardFragmentID
-              )) {
-            return forwardClipIndex
+            for position in PlayableViewportPosition.allCases {
+                if let fragmentID = positionedFragmentIDs[position],
+                   let clipIndex = exactClipIndex(for: EPUBReference(
+                       resourceHref: visibleResourceHref,
+                       fragmentID: fragmentID
+                   )) {
+                    return clipIndex
+                }
+            }
         }
 
         if let laterClipIndex = firstClipIndex(afterResourceHref: visibleResourceHref) {
@@ -1297,10 +1287,10 @@ struct ReaderView: View {
     }
 
     @MainActor
-    private func firstPlayableFragmentIDInViewport(
+    private func playableFragmentIDsByViewportPosition(
         fragmentIDs: [String],
         navigator: EPUBNavigatorViewController
-    ) async -> String? {
+    ) async -> [PlayableViewportPosition: String] {
         let fragmentIDsLiteral = javaScriptArrayLiteral(fragmentIDs)
         let visibleBottomFractionLiteral = String(Double(min(max(navigatorVisibleBottomFraction, 0), 1)))
         let script = """
@@ -1308,117 +1298,11 @@ struct ReaderView: View {
           const fragmentIDs = \(fragmentIDsLiteral);
           const visibleBottomFraction = Math.min(Math.max(\(visibleBottomFractionLiteral), 0), 1);
           const visibleBottom = Math.max(window.innerHeight * visibleBottomFraction, 1);
-
-          const topIntersectingViewport = element => {
-            if (!element) {
-              return null;
-            }
-
-            const style = window.getComputedStyle(element);
-            if (style.display === 'none' || style.visibility === 'hidden') {
-              return null;
-            }
-
-            const rect = element.getBoundingClientRect();
-            if (!(rect.bottom > 0 && rect.top < visibleBottom)) {
-              return null;
-            }
-
-            return rect.top;
-          };
 
           var firstVisible = null;
-          for (const fragmentID of fragmentIDs) {
-            const element = document.getElementById(fragmentID);
-            const visiblePosition = topIntersectingViewport(element);
-            if (visiblePosition === null) {
-              continue;
-            }
-
-            if (!firstVisible || visiblePosition < firstVisible.top) {
-              firstVisible = {
-                top: visiblePosition,
-                fragmentID
-              };
-            }
-          }
-
-          return firstVisible?.fragmentID ?? null;
-        })();
-        """
-
-        let result = await navigator.evaluateJavaScript(script)
-        guard case .success(let value) = result,
-              let fragmentID = value as? String,
-              !fragmentID.isEmpty
-        else {
-            return nil
-        }
-
-        return fragmentID
-    }
-
-    @MainActor
-    private func firstPlayableFragmentIDBeforeViewport(
-        fragmentIDs: [String],
-        navigator: EPUBNavigatorViewController
-    ) async -> String? {
-        let fragmentIDsLiteral = javaScriptArrayLiteral(fragmentIDs)
-        let script = """
-        (() => {
-          const fragmentIDs = \(fragmentIDsLiteral);
-
           var nearestBefore = null;
-          for (const fragmentID of fragmentIDs) {
-            const element = document.getElementById(fragmentID);
-            if (!element) {
-              continue;
-            }
-
-            const style = window.getComputedStyle(element);
-            if (style.display === 'none' || style.visibility === 'hidden') {
-              continue;
-            }
-
-            const rect = element.getBoundingClientRect();
-            if (rect.bottom > 0) {
-              continue;
-            }
-
-            if (!nearestBefore || rect.bottom > nearestBefore.bottom) {
-              nearestBefore = { bottom: rect.bottom, fragmentID };
-            }
-          }
-
-          return nearestBefore?.fragmentID ?? null;
-        })();
-        """
-
-        let result = await navigator.evaluateJavaScript(script)
-        guard case .success(let value) = result,
-              let fragmentID = value as? String,
-              !fragmentID.isEmpty
-        else {
-            return nil
-        }
-
-        return fragmentID
-    }
-
-    @MainActor
-    private func firstPlayableFragmentIDAfterViewport(
-        fragmentIDs: [String],
-        navigator: EPUBNavigatorViewController
-    ) async -> String? {
-        let fragmentIDsLiteral = javaScriptArrayLiteral(fragmentIDs)
-        let visibleBottomFractionLiteral = String(Double(min(max(navigatorVisibleBottomFraction, 0), 1)))
-        let script = """
-        (() => {
-          const fragmentIDs = \(fragmentIDsLiteral);
-          const visibleBottomFraction = Math.min(Math.max(\(visibleBottomFractionLiteral), 0), 1);
-          const visibleBottom = Math.max(window.innerHeight * visibleBottomFraction, 1);
-
           var firstForward = null;
+
           for (const fragmentID of fragmentIDs) {
             const element = document.getElementById(fragmentID);
             if (!element) {
@@ -1431,28 +1315,44 @@ struct ReaderView: View {
             }
 
             const rect = element.getBoundingClientRect();
-            if (rect.top < visibleBottom) {
-              continue;
-            }
-
-            if (!firstForward || rect.top < firstForward.top) {
-              firstForward = { top: rect.top, fragmentID };
+            if (rect.bottom > 0 && rect.top < visibleBottom) {
+              if (!firstVisible || rect.top < firstVisible.top) {
+                firstVisible = { top: rect.top, fragmentID };
+              }
+            } else if (rect.bottom <= 0) {
+              if (!nearestBefore || rect.bottom > nearestBefore.bottom) {
+                nearestBefore = { bottom: rect.bottom, fragmentID };
+              }
+            } else if (rect.top >= visibleBottom) {
+              if (!firstForward || rect.top < firstForward.top) {
+                firstForward = { top: rect.top, fragmentID };
+              }
             }
           }
 
-          return firstForward?.fragmentID ?? null;
+          return JSON.stringify({
+            inViewport: firstVisible?.fragmentID ?? null,
+            before: nearestBefore?.fragmentID ?? null,
+            after: firstForward?.fragmentID ?? null
+          });
         })();
         """
 
         let result = await navigator.evaluateJavaScript(script)
         guard case .success(let value) = result,
-              let fragmentID = value as? String,
-              !fragmentID.isEmpty
+              let json = value as? String,
+              let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
         else {
-            return nil
+            return [:]
         }
 
-        return fragmentID
+        var positionedFragmentIDs: [PlayableViewportPosition: String] = [:]
+        for position in PlayableViewportPosition.allCases {
+            if let fragmentID = object[position.rawValue] as? String, !fragmentID.isEmpty {
+                positionedFragmentIDs[position] = fragmentID
+            }
+        }
+        return positionedFragmentIDs
     }
 
     @MainActor

@@ -237,7 +237,7 @@ struct EPUBArchive {
             let filenameEnd = filenameStart + filenameLength
             guard filenameEnd <= data.count,
                   data.hasBytes(at: filenameEnd, count: extraLength + commentLength),
-                  let path = String(data: data.subdata(in: filenameStart..<filenameEnd), encoding: .utf8)
+                  let path = decodedEntryName(from: data.subdata(in: filenameStart..<filenameEnd), flags: flags)
             else {
                 throw EPUBArchiveError.invalidArchive
             }
@@ -257,20 +257,48 @@ struct EPUBArchive {
         return entries
     }
 
+    nonisolated private static func decodedEntryName(from data: Data, flags: UInt16) -> String? {
+        if let utf8Name = String(data: data, encoding: .utf8) {
+            return utf8Name
+        }
+
+        // Flag bit 11 mandates UTF-8; without it, legacy tools store entry
+        // names as CP437.
+        guard flags & 0x0800 == 0 else {
+            return nil
+        }
+
+        let cp437 = String.Encoding(
+            rawValue: CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.dosLatinUS.rawValue)
+            )
+        )
+        return String(data: data, encoding: cp437)
+    }
+
     nonisolated private static func findEndOfCentralDirectory(in data: Data) -> Int? {
         guard data.count >= 22 else { return nil }
 
         let minimumOffset = max(0, data.count - 65_557)
         var offset = data.count - 22
+        var firstSignatureOffset: Int?
 
         while offset >= minimumOffset {
             if data.uint32(at: offset) == 0x06054b50 {
-                return offset
+                // The signature bytes can also occur inside the archive
+                // comment; a real EOCD's comment runs exactly to end of file.
+                if let commentLength = data.uint16(at: offset + 20).map(Int.init),
+                   offset + 22 + commentLength == data.count {
+                    return offset
+                }
+                if firstSignatureOffset == nil {
+                    firstSignatureOffset = offset
+                }
             }
             offset -= 1
         }
 
-        return nil
+        return firstSignatureOffset
     }
 }
 

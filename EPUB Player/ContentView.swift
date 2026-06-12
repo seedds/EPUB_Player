@@ -5,6 +5,7 @@
 //  Created by F2PGOD on 25/4/2026.
 //
 
+import ImageIO
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -219,6 +220,7 @@ private struct BooksView: View {
                 continue
             }
             let book = books[index]
+            MediaOverlayPreparationCoordinator.shared.cancelPreparation(for: book.id)
             if let epubURL = try? book.resolvedEPUBFileURL() {
                 try? fileManager.removeItem(at: epubURL)
             }
@@ -452,7 +454,23 @@ private struct ProgressPieSlice: Shape {
 }
 
 private struct BookCoverView: View {
+    // 44x56pt at 3x, with headroom; decoding covers at full resolution in a
+    // list row spikes memory and hitches scrolling.
+    private static let maxThumbnailPixelSize: CGFloat = 180
+
     let book: Book
+
+    @State private var coverImage: UIImage?
+
+    init(book: Book) {
+        self.book = book
+        if let coverImageURL = try? book.resolvedCoverImageURL() {
+            _coverImage = State(initialValue: CoverThumbnailLoader.cachedThumbnail(
+                atPath: coverImageURL.path,
+                maxPixelSize: Self.maxThumbnailPixelSize
+            ))
+        }
+    }
 
     var body: some View {
         Group {
@@ -476,13 +494,51 @@ private struct BookCoverView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(.black.opacity(0.08), lineWidth: 1)
         }
+        .task(id: book.coverImagePath) {
+            guard let coverImageURL = try? book.resolvedCoverImageURL() else {
+                coverImage = nil
+                return
+            }
+
+            let path = coverImageURL.path
+            coverImage = await Task.detached(priority: .userInitiated) {
+                CoverThumbnailLoader.thumbnail(atPath: path, maxPixelSize: Self.maxThumbnailPixelSize)
+            }.value
+        }
+    }
+}
+
+private enum CoverThumbnailLoader {
+    private static let cache = NSCache<NSString, UIImage>()
+
+    static func cachedThumbnail(atPath path: String, maxPixelSize: CGFloat) -> UIImage? {
+        cache.object(forKey: cacheKey(for: path, maxPixelSize: maxPixelSize))
     }
 
-    private var coverImage: UIImage? {
-        guard let coverImageURL = try? book.resolvedCoverImageURL() else {
+    static func thumbnail(atPath path: String, maxPixelSize: CGFloat) -> UIImage? {
+        let key = cacheKey(for: path, maxPixelSize: maxPixelSize)
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        else {
             return nil
         }
-        return UIImage(contentsOfFile: coverImageURL.path)
+
+        let image = UIImage(cgImage: cgImage)
+        cache.setObject(image, forKey: key)
+        return image
+    }
+
+    private static func cacheKey(for path: String, maxPixelSize: CGFloat) -> NSString {
+        "\(path)#\(Int(maxPixelSize))" as NSString
     }
 }
 
@@ -679,11 +735,8 @@ private struct SettingsView: View {
             Form {
                 Section("Reader") {
                     NavigationLink {
-                        SkipIntervalSettingView(playbackJumpInterval: Binding(
-                            get: { store.playbackJumpInterval },
-                            set: { store.playbackJumpInterval = $0 }
-                        ))
-                        .toolbar(.hidden, for: .tabBar)
+                        SkipIntervalSettingView(playbackJumpInterval: $store.playbackJumpInterval)
+                            .toolbar(.hidden, for: .tabBar)
                     } label: {
                         SettingsNavigationRow(title: "Skip Interval") {
                             Text(ReaderSettings.playbackJumpIntervalText(store.playbackJumpInterval))
@@ -691,11 +744,8 @@ private struct SettingsView: View {
                     }
 
                     NavigationLink {
-                        AutoRewindSettingView(autoRewindAfterBackgroundMinutes: Binding(
-                            get: { store.autoRewindAfterBackgroundMinutes },
-                            set: { store.autoRewindAfterBackgroundMinutes = $0 }
-                        ))
-                        .toolbar(.hidden, for: .tabBar)
+                        AutoRewindSettingView(autoRewindAfterBackgroundMinutes: $store.autoRewindAfterBackgroundMinutes)
+                            .toolbar(.hidden, for: .tabBar)
                     } label: {
                         SettingsNavigationRow(title: "Auto Rewind") {
                             Text(ReaderSettings.autoRewindAfterBackgroundText(store.autoRewindAfterBackgroundMinutes))
@@ -704,10 +754,7 @@ private struct SettingsView: View {
 
                     NavigationLink {
                         FontFamilySelectionView(
-                            selectedFontFamilyRawValue: Binding(
-                                get: { store.fontFamilyRawValue },
-                                set: { store.fontFamilyRawValue = $0 }
-                            ),
+                            selectedFontFamilyRawValue: $store.fontFamilyRawValue,
                             customFontFamilies: customFontFamilies
                         )
                         .toolbar(.hidden, for: .tabBar)
@@ -729,11 +776,8 @@ private struct SettingsView: View {
 
                 Section("Appearance") {
                     NavigationLink {
-                        ThemeSelectionView(selectedThemeRawValue: Binding(
-                            get: { store.themeRawValue },
-                            set: { store.themeRawValue = $0 }
-                        ))
-                        .toolbar(.hidden, for: .tabBar)
+                        ThemeSelectionView(selectedThemeRawValue: $store.themeRawValue)
+                            .toolbar(.hidden, for: .tabBar)
                     } label: {
                         SettingsNavigationRow(title: "Theme") {
                             Text(selectedThemeName)
@@ -741,10 +785,7 @@ private struct SettingsView: View {
                     }
 
                     NavigationLink {
-                        ReadAloudColorEditor(colorHex: Binding(
-                            get: { store.readAloudColorRawValue },
-                            set: { store.readAloudColorRawValue = $0 }
-                        ))
+                        ReadAloudColorEditor(colorHex: $store.readAloudColorRawValue)
                             .padding(.horizontal, 16)
                             .padding(.top, 12)
                             .padding(.bottom, 16)
