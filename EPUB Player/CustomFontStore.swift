@@ -267,10 +267,10 @@ enum CustomFontStore {
     private static func synchronizedFamilies(store: AppStateStore) -> [ImportedFontFamily] {
         let loadedFamilies = store.customFontFamilies
         guard let directory = try? AppStorage.customFontsDirectory() else {
-            if !loadedFamilies.isEmpty {
-                store.setCustomFontFamilies([])
-            }
-            return []
+            // Resolving the directory can fail transiently (disk full,
+            // protected data unavailable); that says nothing about the fonts,
+            // so keep the records instead of erasing the registry.
+            return loadedFamilies
         }
 
         let filteredFamilies = loadedFamilies.compactMap { family -> ImportedFontFamily? in

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "asc-cli-usage": {
+      "source": "rudrankriyam/asc-skills",
+      "sourceType": "github",
+      "skillPath": "skills/asc-cli-usage/SKILL.md",
+      "computedHash": "7c6737e9d83e101de962b374605ca3f845f4debc53b89f723e5ac8dafd0dd09f"
+    }
+  }
+}

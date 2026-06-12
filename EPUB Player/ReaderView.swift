@@ -38,6 +38,7 @@ struct ReaderView: View {
     @State private var openingStatusMessage = "Opening EPUB..."
     @State private var openingSecondaryMessage: String?
     @State private var openingProgress: Double?
+    @State private var hasRestoredPlaybackState = false
 
     var body: some View {
         Group {
@@ -608,6 +609,13 @@ struct ReaderView: View {
     @MainActor
     private func persistLastPlayedClip() {
         guard let clip = playback.currentClip else {
+            // A nil clip before restore has run means the book is still
+            // opening, not that the user cleared playback — keep the saved
+            // resume point.
+            guard hasRestoredPlaybackState else {
+                return
+            }
+
             book.lastPlayedTextResourceHref = nil
             book.lastPlayedFragmentID = nil
             book.lastPlayedClipBegin = nil
@@ -625,6 +633,7 @@ struct ReaderView: View {
 
     @MainActor
     private func restoreLastPlayedClipSelectionIfAvailable(with navigator: EPUBNavigatorViewController) async {
+        hasRestoredPlaybackState = true
         guard let restoredIndex = restoredLastPlayedClipIndex() else {
             navigator.apply(decorations: [], in: mediaOverlayDecorationGroup)
             return
@@ -857,8 +866,12 @@ struct ReaderView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let parts = normalized.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
-        let resourceHref = parts.first.map(String.init) ?? ""
-        let fragmentID = parts.count > 1 ? String(parts[1]) : nil
+        let rawResourceHref = parts.first.map(String.init) ?? ""
+        let rawFragmentID = parts.count > 1 ? String(parts[1]) : nil
+        // Navigator locators arrive percent-encoded while SMIL-derived clip
+        // hrefs are already decoded; compare both in decoded form.
+        let resourceHref = rawResourceHref.removingPercentEncoding ?? rawResourceHref
+        let fragmentID = rawFragmentID.map { $0.removingPercentEncoding ?? $0 }
         return EPUBReference(resourceHref: resourceHref, fragmentID: fragmentID)
     }
 

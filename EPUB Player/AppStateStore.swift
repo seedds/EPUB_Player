@@ -35,6 +35,20 @@ enum BooksSortOption: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+private struct FailableDecodable<T: Decodable>: Decodable {
+    let value: T?
+
+    init(from decoder: Decoder) throws {
+        value = try? T(from: decoder)
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeValue<T: Decodable>(_ type: T.Type, forKey key: Key, default defaultValue: T) -> T {
+        ((try? decodeIfPresent(type, forKey: key)) ?? nil) ?? defaultValue
+    }
+}
+
 private struct PersistedAppState: Codable {
     var books: [Book]
     var customFontFamilies: [CustomFontStore.ImportedFontFamily]
@@ -48,6 +62,73 @@ private struct PersistedAppState: Codable {
     var autoRewindAfterBackgroundMinutes: Int?
     var uploadServerPort: Int
     var booksSortOptionRawValue: String
+
+    private enum CodingKeys: String, CodingKey {
+        case books
+        case customFontFamilies
+        case fontSize
+        case lineHeight
+        case fontFamilyRawValue
+        case themeRawValue
+        case readAloudColorRawValue
+        case playbackSpeed
+        case playbackJumpInterval
+        case autoRewindAfterBackgroundMinutes
+        case uploadServerPort
+        case booksSortOptionRawValue
+    }
+
+    // Tolerates missing keys and corrupt entries so a schema change or one bad
+    // record never resets the whole library.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = PersistedAppState.default
+        books = container.decodeValue([FailableDecodable<Book>].self, forKey: .books, default: [])
+            .compactMap(\.value)
+        customFontFamilies = container.decodeValue(
+            [FailableDecodable<CustomFontStore.ImportedFontFamily>].self,
+            forKey: .customFontFamilies,
+            default: []
+        ).compactMap(\.value)
+        fontSize = container.decodeValue(Double.self, forKey: .fontSize, default: defaults.fontSize)
+        lineHeight = container.decodeValue(Double.self, forKey: .lineHeight, default: defaults.lineHeight)
+        fontFamilyRawValue = container.decodeValue(String.self, forKey: .fontFamilyRawValue, default: defaults.fontFamilyRawValue)
+        themeRawValue = container.decodeValue(String.self, forKey: .themeRawValue, default: defaults.themeRawValue)
+        readAloudColorRawValue = container.decodeValue(String.self, forKey: .readAloudColorRawValue, default: defaults.readAloudColorRawValue)
+        playbackSpeed = container.decodeValue(Double.self, forKey: .playbackSpeed, default: defaults.playbackSpeed)
+        playbackJumpInterval = container.decodeValue(Double.self, forKey: .playbackJumpInterval, default: defaults.playbackJumpInterval)
+        autoRewindAfterBackgroundMinutes = (try? container.decodeIfPresent(Int.self, forKey: .autoRewindAfterBackgroundMinutes)) ?? nil
+        uploadServerPort = container.decodeValue(Int.self, forKey: .uploadServerPort, default: defaults.uploadServerPort)
+        booksSortOptionRawValue = container.decodeValue(String.self, forKey: .booksSortOptionRawValue, default: defaults.booksSortOptionRawValue)
+    }
+
+    init(
+        books: [Book],
+        customFontFamilies: [CustomFontStore.ImportedFontFamily],
+        fontSize: Double,
+        lineHeight: Double,
+        fontFamilyRawValue: String,
+        themeRawValue: String,
+        readAloudColorRawValue: String,
+        playbackSpeed: Double,
+        playbackJumpInterval: Double,
+        autoRewindAfterBackgroundMinutes: Int?,
+        uploadServerPort: Int,
+        booksSortOptionRawValue: String
+    ) {
+        self.books = books
+        self.customFontFamilies = customFontFamilies
+        self.fontSize = fontSize
+        self.lineHeight = lineHeight
+        self.fontFamilyRawValue = fontFamilyRawValue
+        self.themeRawValue = themeRawValue
+        self.readAloudColorRawValue = readAloudColorRawValue
+        self.playbackSpeed = playbackSpeed
+        self.playbackJumpInterval = playbackJumpInterval
+        self.autoRewindAfterBackgroundMinutes = autoRewindAfterBackgroundMinutes
+        self.uploadServerPort = uploadServerPort
+        self.booksSortOptionRawValue = booksSortOptionRawValue
+    }
 
     static let `default` = PersistedAppState(
         books: [],
@@ -168,11 +249,36 @@ final class AppStateStore: ObservableObject {
             canPersistState = true
             applyPersistedState(.default)
         case .unreadable:
-            canPersistState = false
+            // Keep the unreadable file around for recovery; only allow
+            // overwriting it once it has been safely moved aside.
+            canPersistState = backUpUnreadableStateFile()
             applyPersistedState(.default)
         }
 
         configureBookSubscriptions()
+    }
+
+    private func backUpUnreadableStateFile() -> Bool {
+        guard let stateURL = try? AppStorage.stateURL() else {
+            return false
+        }
+
+        guard FileManager.default.fileExists(atPath: stateURL.path) else {
+            return true
+        }
+
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        let backupURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("state-corrupt-\(timestamp).json", isDirectory: false)
+
+        do {
+            try FileManager.default.moveItem(at: stateURL, to: backupURL)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func readPersistedState() -> PersistedAppStateLoadResult {
@@ -184,9 +290,11 @@ final class AppStateStore: ObservableObject {
             return .missing
         }
 
-        guard let data = try? Data(contentsOf: stateURL),
-              let persistedState = try? JSONDecoder().decode(PersistedAppState.self, from: data)
-        else {
+        guard let data = try? Data(contentsOf: stateURL) else {
+            return .unreadable
+        }
+
+        guard let persistedState = try? JSONDecoder().decode(PersistedAppState.self, from: data) else {
             return .unreadable
         }
 
@@ -330,11 +438,10 @@ final class AppStateStore: ObservableObject {
     }
 
     private func scheduleSave() {
-        guard !isHydratingState else {
+        guard !isHydratingState, canPersistState else {
             return
         }
 
-        canPersistState = true
         saveTask?.cancel()
         saveTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)

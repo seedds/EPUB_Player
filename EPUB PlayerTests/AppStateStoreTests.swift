@@ -178,6 +178,81 @@ final class AppStateStoreTests: XCTestCase {
         // This is a placeholder for actual persistence testing
     }
 
+    func testStateSurvivesMissingKeys() async throws {
+        // Simulates upgrading from a build persisted before newer settings
+        // keys existed: the books must survive, missing keys get defaults.
+        let stateJSON = """
+        {
+            "books": [
+                {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "title": "Old Build Book",
+                    "author": "Author",
+                    "originalFilename": "old.epub",
+                    "epubFilePath": "Books/old.epub",
+                    "importedAt": 0
+                }
+            ],
+            "customFontFamilies": [],
+            "fontSize": 20,
+            "lineHeight": 1.5,
+            "fontFamilyRawValue": "Literata",
+            "themeRawValue": "system",
+            "readAloudColorRawValue": "#FFFF00",
+            "playbackSpeed": 1,
+            "playbackJumpInterval": 15
+        }
+        """
+        try Data(stateJSON.utf8).write(to: AppStorage.stateURL())
+
+        let reloadedStore = AppStateStore()
+        XCTAssertEqual(reloadedStore.books.map(\.title), ["Old Build Book"])
+        XCTAssertEqual(reloadedStore.fontSize, 20)
+        XCTAssertEqual(reloadedStore.uploadServerPort, ReaderSettings.defaultUploadServerPort)
+        XCTAssertEqual(reloadedStore.booksSortOption, .recentlyAdded)
+    }
+
+    func testStateSurvivesCorruptBookRecord() async throws {
+        let stateJSON = """
+        {
+            "books": [
+                {"id": "not-a-uuid", "title": 42},
+                {
+                    "id": "22222222-2222-2222-2222-222222222222",
+                    "title": "Intact Book",
+                    "author": "Author",
+                    "originalFilename": "intact.epub",
+                    "epubFilePath": "Books/intact.epub",
+                    "importedAt": 0
+                }
+            ]
+        }
+        """
+        try Data(stateJSON.utf8).write(to: AppStorage.stateURL())
+
+        let reloadedStore = AppStateStore()
+        XCTAssertEqual(reloadedStore.books.map(\.title), ["Intact Book"])
+    }
+
+    func testUnreadableStateIsBackedUpBeforeOverwriting() async throws {
+        let stateURL = try AppStorage.stateURL()
+        try Data("not json".utf8).write(to: stateURL)
+
+        let reloadedStore = AppStateStore()
+        XCTAssertTrue(reloadedStore.books.isEmpty)
+
+        reloadedStore.fontSize = 30
+        reloadedStore.persistNow()
+
+        let cacheContents = try FileManager.default.contentsOfDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        )
+        let backups = cacheContents.filter { $0.lastPathComponent.hasPrefix("state-corrupt-") }
+        XCTAssertEqual(backups.count, 1, "Unreadable state file should be moved aside, not destroyed")
+        XCTAssertEqual(try Data(contentsOf: backups[0]), Data("not json".utf8))
+    }
+
     private func makeBook(title: String, author: String, importedAt: TimeInterval) -> Book {
         let filename = "\(title)-\(author).epub"
         return Book(
