@@ -375,12 +375,30 @@ private struct BookRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(rowAccessibilityLabel)
 
             Rectangle()
                 .fill(Color(uiColor: .separator))
                 .frame(height: 1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var rowAccessibilityLabel: String {
+        var parts = [book.title, "by \(book.author)"]
+        if let audioDurationText {
+            parts.append("read-aloud duration \(audioDurationText)")
+        }
+        if (book.mediaOverlayClipCount ?? 0) > 0 {
+            parts.append("read-aloud ready")
+        } else if book.mediaOverlayPreparationState == .pending || book.mediaOverlayPreparationState == .processing {
+            parts.append("preparing read-aloud")
+        } else if book.mediaOverlayPreparationState == .failed {
+            parts.append("read-aloud unavailable")
+        }
+        parts.append("\(Int((readingProgress * 100).rounded())) percent read")
+        return parts.joined(separator: ", ")
     }
 
     private var readingProgress: Double {
@@ -456,7 +474,7 @@ private struct ProgressPieSlice: Shape {
 private struct BookCoverView: View {
     // 44x56pt at 3x, with headroom; decoding covers at full resolution in a
     // list row spikes memory and hitches scrolling.
-    private static let maxThumbnailPixelSize: CGFloat = 180
+    nonisolated private static let maxThumbnailPixelSize: CGFloat = 180
 
     let book: Book
 
@@ -509,13 +527,14 @@ private struct BookCoverView: View {
 }
 
 private enum CoverThumbnailLoader {
-    private static let cache = NSCache<NSString, UIImage>()
+    // NSCache is documented thread-safe.
+    nonisolated(unsafe) private static let cache = NSCache<NSString, UIImage>()
 
-    static func cachedThumbnail(atPath path: String, maxPixelSize: CGFloat) -> UIImage? {
+    nonisolated static func cachedThumbnail(atPath path: String, maxPixelSize: CGFloat) -> UIImage? {
         cache.object(forKey: cacheKey(for: path, maxPixelSize: maxPixelSize))
     }
 
-    static func thumbnail(atPath path: String, maxPixelSize: CGFloat) -> UIImage? {
+    nonisolated static func thumbnail(atPath path: String, maxPixelSize: CGFloat) -> UIImage? {
         let key = cacheKey(for: path, maxPixelSize: maxPixelSize)
         if let cached = cache.object(forKey: key) {
             return cached
@@ -537,7 +556,7 @@ private enum CoverThumbnailLoader {
         return image
     }
 
-    private static func cacheKey(for path: String, maxPixelSize: CGFloat) -> NSString {
+    nonisolated private static func cacheKey(for path: String, maxPixelSize: CGFloat) -> NSString {
         "\(path)#\(Int(maxPixelSize))" as NSString
     }
 }
@@ -1062,9 +1081,12 @@ private struct CustomFontsView: View {
     private func handleImport(_ result: Result<[URL], Error>) {
         do {
             let urls = try result.get()
-            try CustomFontStore.importFonts(from: urls, store: store)
+            let importedFamilies = try CustomFontStore.importFonts(from: urls, store: store)
             reloadFonts()
             onFontsChanged()
+            if let registrationWarning = CustomFontStore.registrationFailureMessage(for: importedFamilies) {
+                errorMessage = registrationWarning
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1153,6 +1175,8 @@ private struct ReadAloudColorEditor: View {
                             .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Highlight color \(presetHex)")
+                    .accessibilityAddTraits(isSelectedSwatch(presetHex) ? .isSelected : [])
                 }
             }
 

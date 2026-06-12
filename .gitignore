@@ -14,3 +14,7 @@ Pods/
 .swiftpm/
 .build/
 __pycache__/
+
+# Local AI tooling artifacts
+skills-lock.json
+.agents/

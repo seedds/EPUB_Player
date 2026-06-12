@@ -355,6 +355,8 @@ struct ReaderSettingSliderRow: View {
             }
 
             Slider(value: $value, in: range, step: step)
+                .accessibilityLabel(title)
+                .accessibilityValue(valueText)
         }
     }
 }

@@ -117,17 +117,17 @@ enum EPUBMediaOverlayService {
         at epubURL: URL,
         bookID: UUID,
         progressHandler: ((EPUBMediaOverlayProgress) -> Void)? = nil
-    ) throws -> EPUBMediaOverlayParseResult? {
+    ) async throws -> EPUBMediaOverlayParseResult? {
         reportProgress(
             EPUBMediaOverlayProgress(fractionCompleted: 0.05, message: "Opening EPUB..."),
             using: progressHandler
         )
-        let archive = try EPUBArchive(url: epubURL)
+        let archive = try await EPUBArchive(url: epubURL)
         reportProgress(
             EPUBMediaOverlayProgress(fractionCompleted: 0.15, message: "Reading package metadata..."),
             using: progressHandler
         )
-        guard let package = try EPUBMetadataService.packageInfo(in: archive) else {
+        guard let package = try await EPUBMetadataService.packageInfo(in: archive) else {
             reportProgress(
                 EPUBMediaOverlayProgress(fractionCompleted: 1, message: "Read-aloud unavailable"),
                 using: progressHandler
@@ -138,7 +138,7 @@ enum EPUBMediaOverlayService {
             EPUBMediaOverlayProgress(fractionCompleted: 0.25, message: "Scanning media overlays..."),
             using: progressHandler
         )
-        guard let manifest = try parse(in: archive, package: package, progressHandler: progressHandler), manifest.clipCount > 0 else {
+        guard let manifest = try await parse(in: archive, package: package, progressHandler: progressHandler), manifest.clipCount > 0 else {
             reportProgress(
                 EPUBMediaOverlayProgress(fractionCompleted: 1, message: "Read-aloud unavailable"),
                 using: progressHandler
@@ -170,11 +170,11 @@ enum EPUBMediaOverlayService {
         in archive: EPUBArchive,
         package: EPUBPackageInfo,
         progressHandler: ((EPUBMediaOverlayProgress) -> Void)? = nil
-    ) throws -> EPUBMediaOverlayManifest? {
+    ) async throws -> EPUBMediaOverlayManifest? {
         let virtualRoot = URL(fileURLWithPath: "/virtual-epub-root", isDirectory: true)
-        return try parseInternal(root: virtualRoot, package: package, progressHandler: progressHandler) { smilURL in
+        return try await parseInternal(root: virtualRoot, package: package, progressHandler: progressHandler) { smilURL in
             guard let smilPath = AppStorage.relativePath(from: smilURL.path, under: virtualRoot.path),
-                  let smilData = try archive.data(for: smilPath)
+                  let smilData = try await archive.data(for: smilPath)
             else {
                 return []
             }
@@ -191,8 +191,8 @@ enum EPUBMediaOverlayService {
         root: URL,
         package: EPUBPackageInfo,
         progressHandler: ((EPUBMediaOverlayProgress) -> Void)? = nil,
-        clipLoader: (URL) throws -> [EPUBMediaOverlayClip]
-    ) throws -> EPUBMediaOverlayManifest? {
+        clipLoader: (URL) async throws -> [EPUBMediaOverlayClip]
+    ) async throws -> EPUBMediaOverlayManifest? {
         let packageDirectory = package.packageURL.deletingLastPathComponent()
         var smilItemsById: [String: EPUBPackageInfo.ManifestItem] = [:]
         for item in package.manifestItems where isSMIL(item) {
@@ -244,7 +244,7 @@ enum EPUBMediaOverlayService {
                 continue
             }
 
-            let clips = try clipLoader(smilURL)
+            let clips = try await clipLoader(smilURL)
             guard !clips.isEmpty else {
                 continue
             }

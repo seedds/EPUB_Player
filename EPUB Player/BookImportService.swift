@@ -197,7 +197,7 @@ enum BookImportService {
                     let cachedCoverPath: String?
                     if !BookAssetCacheService.hasCachedCover(for: existingBook) {
                         let coverTask = Task.detached(priority: .utility) {
-                            try regenerateCoverImage(from: sourceURL, bookID: existingBook.id)
+                            try await regenerateCoverImage(from: sourceURL, bookID: existingBook.id)
                         }
                         cachedCoverPath = try await coverTask.value
                     } else {
@@ -446,21 +446,21 @@ enum BookImportService {
             ImportProgress(fractionCompleted: 0.24, message: "Validating EPUB..."),
             using: progressHandler
         )
-        let archive = try EPUBArchive(url: fileURL)
-        try archive.validateEPUB()
+        let archive = try await EPUBArchive(url: fileURL)
+        try await archive.validateEPUB()
 
         await reportProgress(
             ImportProgress(fractionCompleted: 0.6, message: "Reading metadata..."),
             using: progressHandler
         )
-        let package = try EPUBMetadataService.packageInfo(in: archive)
+        let package = try await EPUBMetadataService.packageInfo(in: archive)
         var metadata = package.map(EPUBMetadataService.metadata(from:)) ?? EPUBMetadata()
 
         await reportProgress(
             ImportProgress(fractionCompleted: 0.8, message: "Caching cover..."),
             using: progressHandler
         )
-        metadata.coverImagePath = try cacheCoverImage(from: archive, package: package, bookID: bookID)
+        metadata.coverImagePath = try await cacheCoverImage(from: archive, package: package, bookID: bookID)
 
         try? BookAssetCacheService.removeOverlayArtifacts(for: bookID)
 
@@ -549,21 +549,21 @@ enum BookImportService {
         )
     }
 
-    nonisolated private static func regenerateCoverImage(from sourceURL: URL, bookID: UUID) throws -> String? {
-        let archive = try EPUBArchive(url: sourceURL)
-        try archive.validateEPUB()
-        let package = try EPUBMetadataService.packageInfo(in: archive)
-        return try cacheCoverImage(from: archive, package: package, bookID: bookID)
+    nonisolated private static func regenerateCoverImage(from sourceURL: URL, bookID: UUID) async throws -> String? {
+        let archive = try await EPUBArchive(url: sourceURL)
+        try await archive.validateEPUB()
+        let package = try await EPUBMetadataService.packageInfo(in: archive)
+        return try await cacheCoverImage(from: archive, package: package, bookID: bookID)
     }
 
     nonisolated private static func cacheCoverImage(
         from archive: EPUBArchive,
         package: EPUBPackageInfo?,
         bookID: UUID
-    ) throws -> String? {
+    ) async throws -> String? {
         try BookAssetCacheService.removeCachedCover(for: bookID)
         guard let package,
-              let coverAsset = try EPUBMetadataService.coverImageAsset(in: archive, package: package)
+              let coverAsset = try await EPUBMetadataService.coverImageAsset(in: archive, package: package)
         else {
             return nil
         }
@@ -599,9 +599,15 @@ enum BookImportService {
                 continue
             }
 
-            let cachedCoverPath = try? await Task.detached(priority: .utility) {
-                try regenerateCoverImage(from: sourceURL, bookID: book.id)
-            }.value
+            let cachedCoverPath: String?
+            do {
+                cachedCoverPath = try await Task.detached(priority: .utility) {
+                    try await regenerateCoverImage(from: sourceURL, bookID: book.id)
+                }.value
+            } catch {
+                print("BookImportService: cover regeneration failed for \(book.originalFilename): \(error)")
+                cachedCoverPath = nil
+            }
 
             guard let cachedCoverPath else {
                 continue
@@ -836,14 +842,14 @@ enum BookAssetCacheService {
         resourcePath: String,
         bookID: UUID,
         epubURL: URL
-    ) throws -> URL {
+    ) async throws -> URL {
         let destinationURL = try AppStorage.audioCacheFileURL(for: bookID, resourcePath: resourcePath)
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             return destinationURL
         }
 
-        let archive = try EPUBArchive(url: epubURL)
-        guard let data = try archive.data(for: resourcePath) else {
+        let archive = try await EPUBArchive(url: epubURL)
+        guard let data = try await archive.data(for: resourcePath) else {
             throw BookAssetCacheError.missingArchiveEntry(resourcePath)
         }
 
@@ -936,7 +942,7 @@ final class MediaOverlayPreparationCoordinator {
                 // Detached tasks don't inherit cancellation; forward it so a
                 // deleted book's parse stops instead of re-writing its cache.
                 let parseTask = Task.detached(priority: priority) {
-                    try EPUBMediaOverlayService.parseAndWrite(
+                    try await EPUBMediaOverlayService.parseAndWrite(
                         at: sourceURL,
                         bookID: bookID,
                         progressHandler: progressHandler
