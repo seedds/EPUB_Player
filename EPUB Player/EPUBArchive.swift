@@ -112,7 +112,7 @@ struct EPUBArchive {
 
     // The extract consumer is @Sendable, so chunk accumulation needs a
     // lock-guarded box rather than a captured var.
-    private final class DataAccumulator: @unchecked Sendable {
+    private nonisolated final class DataAccumulator: @unchecked Sendable {
         private let lock = NSLock()
         private var buffer = Data()
 
