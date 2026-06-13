@@ -323,9 +323,9 @@ struct ReaderView: View {
             onLocationDidChange: { locator in
                 handleLocationDidChange(locator, navigator: navigator)
             },
-            onAudioTap: { reference in
+            onAudioTap: { resourceHref, point in
                 Task {
-                    await playFromTappedReference(reference, navigator: navigator)
+                    await playFromTappedPoint(resourceHref: resourceHref, point: point, navigator: navigator)
                 }
             }
         )
@@ -786,13 +786,99 @@ struct ReaderView: View {
     }
 
     @MainActor
-    private func playFromTappedReference(_ reference: EPUBReference, navigator: EPUBNavigatorViewController) async {
-        guard let clipIndex = exactClipIndex(for: reference) else {
+    private func playFromTappedPoint(resourceHref: String, point: CGPoint, navigator: EPUBNavigatorViewController) async {
+        let normalizedResource = normalizedResourceHref(for: resourceHref)
+        guard let clipIndex = await resolvedTappedClipIndex(
+            resourceHref: normalizedResource,
+            point: point,
+            navigator: navigator
+        ) else {
             return
         }
 
         playback.selectClip(at: clipIndex, autoplay: true, reason: "audioTap")
         applyCurrentClipDecoration(with: navigator)
+    }
+
+    @MainActor
+    private func resolvedTappedClipIndex(
+        resourceHref: String,
+        point: CGPoint,
+        navigator: EPUBNavigatorViewController
+    ) async -> Int? {
+        let playableIDs = playableFragmentIDs(for: resourceHref)
+        if !playableIDs.isEmpty,
+           let fragmentID = await playableFragmentID(at: point, fragmentIDs: playableIDs, navigator: navigator),
+           let clipIndex = exactClipIndex(for: EPUBReference(resourceHref: resourceHref, fragmentID: fragmentID)) {
+            return clipIndex
+        }
+
+        // A tap inside a narrated resource should never be silently dropped:
+        // fall back to that resource's first clip when no fragment resolves.
+        return firstClipIndex(forResourceHref: resourceHref)
+    }
+
+    @MainActor
+    private func playableFragmentID(
+        at point: CGPoint,
+        fragmentIDs: [String],
+        navigator: EPUBNavigatorViewController
+    ) async -> String? {
+        let fragmentIDsLiteral = javaScriptArrayLiteral(fragmentIDs)
+        let script = """
+        (() => {
+          const fragmentIDs = \(fragmentIDsLiteral);
+          const x = \(String(Double(point.x)));
+          const y = \(String(Double(point.y)));
+
+          var containing = null;
+          var nearest = null;
+          var nearestDistance = Infinity;
+
+          for (const fragmentID of fragmentIDs) {
+            const element = document.getElementById(fragmentID);
+            if (!element) {
+              continue;
+            }
+
+            const style = window.getComputedStyle(element);
+            if (style.display === 'none' || style.visibility === 'hidden') {
+              continue;
+            }
+
+            const rect = element.getBoundingClientRect();
+            if (rect.width <= 0 && rect.height <= 0) {
+              continue;
+            }
+
+            if (y >= rect.top && y <= rect.bottom && x >= rect.left && x <= rect.right) {
+              if (!containing) {
+                containing = fragmentID;
+              }
+            }
+
+            const centerY = (rect.top + rect.bottom) / 2;
+            const distance = Math.abs(centerY - y);
+            if (distance < nearestDistance) {
+              nearestDistance = distance;
+              nearest = fragmentID;
+            }
+          }
+
+          return JSON.stringify({ fragmentID: containing ?? nearest });
+        })();
+        """
+
+        let result = await navigator.evaluateJavaScript(script)
+        guard case .success(let value) = result,
+              let json = value as? String,
+              let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+              let fragmentID = object["fragmentID"] as? String,
+              !fragmentID.isEmpty
+        else {
+            return nil
+        }
+        return fragmentID
     }
 
     private func exactClipIndex(for reference: EPUBReference) -> Int? {
@@ -1785,7 +1871,7 @@ private struct PlaybackBarFramePreferenceKey: PreferenceKey {
 private struct EPUBNavigatorHost: UIViewControllerRepresentable {
     let navigator: EPUBNavigatorViewController
     let onLocationDidChange: (Locator) -> Void
-    let onAudioTap: (EPUBReference) -> Void
+    let onAudioTap: (String, CGPoint) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -1818,7 +1904,7 @@ private struct EPUBNavigatorHost: UIViewControllerRepresentable {
         }
 
         var onLocationDidChange: (Locator) -> Void
-        var onAudioTap: (EPUBReference) -> Void
+        var onAudioTap: (String, CGPoint) -> Void
         private weak var navigator: EPUBNavigatorViewController?
         private weak var userContentController: WKUserContentController?
         private var panRecognizer: UIPanGestureRecognizer?
@@ -1835,7 +1921,7 @@ private struct EPUBNavigatorHost: UIViewControllerRepresentable {
 
         init(
             onLocationDidChange: @escaping (Locator) -> Void,
-            onAudioTap: @escaping (EPUBReference) -> Void
+            onAudioTap: @escaping (String, CGPoint) -> Void
         ) {
             self.onLocationDidChange = onLocationDidChange
             self.onAudioTap = onAudioTap
@@ -1910,13 +1996,14 @@ private struct EPUBNavigatorHost: UIViewControllerRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == audioTapMessageName,
                   let body = message.body as? [String: Any],
-                  let href = body["href"] as? String
+                  let href = body["href"] as? String,
+                  let x = body["x"] as? Double,
+                  let y = body["y"] as? Double
             else {
                 return
             }
 
-            let fragmentID = body["fragmentID"] as? String
-            onAudioTap(EPUBReference(resourceHref: href, fragmentID: fragmentID))
+            onAudioTap(href, CGPoint(x: x, y: y))
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -2035,29 +2122,13 @@ private struct EPUBNavigatorHost: UIViewControllerRepresentable {
 
               const ignoredSelector = 'a, button, input, textarea, select, summary, label, [role="button"], [contenteditable="true"]';
 
-              function nearestIdentifiedElement(target) {
+              document.addEventListener('click', event => {
+                const target = event.target;
                 if (!(target instanceof Element)) {
-                  return null;
+                  return;
                 }
 
                 if (target.closest(ignoredSelector)) {
-                  return null;
-                }
-
-                var node = target;
-                while (node) {
-                  if (node.id) {
-                    return node;
-                  }
-                  node = node.parentElement;
-                }
-
-                return null;
-              }
-
-              document.addEventListener('click', event => {
-                const element = nearestIdentifiedElement(event.target);
-                if (!element) {
                   return;
                 }
 
@@ -2068,7 +2139,8 @@ private struct EPUBNavigatorHost: UIViewControllerRepresentable {
 
                 messageHandler.postMessage({
                   href,
-                  fragmentID: element.id || null
+                  x: event.clientX,
+                  y: event.clientY
                 });
               }, true);
             })();
