@@ -1119,7 +1119,7 @@ struct ReaderView: View {
           const visibleBottom = window.innerHeight * visibleBottomFraction;
           const visibleHeight = Math.max(visibleBottom, 1);
           const preferredTop = visibleHeight * 0.05;
-          const nextTextPartThreshold = visibleBottom * 0.95;
+          const nextTextPartThreshold = visibleBottom * 0.90;
 
           const debugPayload = (action, nextTextPartElement, nextTextPartRect) => ({
             action,
@@ -1155,6 +1155,8 @@ struct ReaderView: View {
             return rect.width > 0 || rect.height > 0;
           };
 
+          const currentRect = startElement.getBoundingClientRect();
+
           const nextTextPartElement = (() => {
             const identifiedElements = Array.from(document.querySelectorAll('[id]'));
             const currentIndex = identifiedElements.indexOf(startElement);
@@ -1164,15 +1166,15 @@ struct ReaderView: View {
 
             for (let index = currentIndex + 1; index < identifiedElements.length; index += 1) {
               const candidate = identifiedElements[index];
-              if (isVisible(candidate)) {
+              if (isVisible(candidate)
+                  && !startElement.contains(candidate)
+                  && candidate.getBoundingClientRect().top > currentRect.top) {
                 return candidate;
               }
             }
 
             return null;
           })();
-
-          const currentRect = startElement.getBoundingClientRect();
           const nextTextPartRect = nextTextPartElement?.getBoundingClientRect() ?? null;
           const nextTextPartTooCloseToBottom = nextTextPartRect !== null && nextTextPartRect.top >= nextTextPartThreshold;
           const currentStartBeforePreferredTop = currentRect.top < preferredTop;
