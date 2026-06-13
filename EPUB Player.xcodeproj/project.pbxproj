@@ -369,7 +369,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 1.0.3;
+				MARKETING_VERSION = 1.0.5;
 				PRODUCT_BUNDLE_IDENTIFIER = com.seedds.epubplayer;
 				PRODUCT_MODULE_NAME = EPUBPlayer;
 				PRODUCT_NAME = EPUBPlayer;
@@ -414,7 +414,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 1.0.3;
+				MARKETING_VERSION = 1.0.5;
 				PRODUCT_BUNDLE_IDENTIFIER = com.seedds.epubplayer;
 				PRODUCT_MODULE_NAME = EPUBPlayer;
 				PRODUCT_NAME = EPUBPlayer;
@@ -558,11 +558,6 @@
 			package = 5FBAAC8B2F9D000100CDF69E /* XCRemoteSwiftPackageReference "swift-toolkit" */;
 			productName = ReadiumShared;
 		};
-		5FBAACA12F9D000200CDF69E /* ReadiumZIPFoundation */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5FBAACA02F9D000200CDF69E /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
-			productName = ReadiumZIPFoundation;
-		};
 		5FBAAC8D2F9D000100CDF69E /* ReadiumStreamer */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5FBAAC8B2F9D000100CDF69E /* XCRemoteSwiftPackageReference "swift-toolkit" */;
@@ -577,6 +572,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5FBAAC8B2F9D000100CDF69E /* XCRemoteSwiftPackageReference "swift-toolkit" */;
 			productName = ReadiumAdapterGCDWebServer;
+		};
+		5FBAACA12F9D000200CDF69E /* ReadiumZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5FBAACA02F9D000200CDF69E /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ReadiumZIPFoundation;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
