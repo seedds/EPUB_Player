@@ -1157,6 +1157,24 @@ struct ReaderView: View {
 
           const currentRect = startElement.getBoundingClientRect();
 
+          // Find the next on-screen text part that follows the current clip, so we
+          // can scroll ahead before the current clip's tail slides off the bottom.
+          //
+          // querySelectorAll('[id]') returns every id-bearing element in DOM order,
+          // NOT just sibling text parts. The element right after startElement in that
+          // list is very often one of its OWN descendants (Kobo wraps each sentence in
+          // nested <span id="kobo.x.y"> children). A descendant shares the current
+          // clip's bounding box, so its top equals currentRect.top — which is far above
+          // the bottom threshold. That made the "next part close to bottom" check below
+          // never fire for the last clips of a page: it kept comparing the threshold
+          // against the CURRENT clip's own top and concluded nothing needed scrolling.
+          //
+          // To get a genuinely-following part we skip any candidate that is:
+          //   1. not visible,
+          //   2. a descendant of the current clip (startElement.contains), or
+          //   3. positioned at or above the current clip's top (ancestors / wrappers
+          //      that begin at the same y as startElement).
+          // Only an element that starts strictly below the current clip qualifies.
           const nextTextPartElement = (() => {
             const identifiedElements = Array.from(document.querySelectorAll('[id]'));
             const currentIndex = identifiedElements.indexOf(startElement);
