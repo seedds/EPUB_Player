@@ -134,6 +134,7 @@ struct ReaderView: View {
                     preferences: preferences,
                     defaults: EPUBDefaults(scroll: true, spread: .never),
                     disablePageTurnsWhileScrolling: true,
+                    decorationTemplates: readerDecorationTemplates(),
                     fontFamilyDeclarations: fontFamilyDeclarations()
                 )
             )
@@ -1462,6 +1463,25 @@ struct ReaderView: View {
             }
         }
         return positionedFragmentIDs
+    }
+
+    /// Decoration templates for the navigator.
+    ///
+    /// Overrides the active highlight to be background-only (`lineWeight: 0`).
+    /// Readium fragments a single visual line into multiple overlay boxes with
+    /// inconsistent bottoms, so a per-box `border-bottom` underline renders
+    /// unevenly (left higher than right). The contiguous background fill does
+    /// not have this problem. Other values mirror `defaultTemplates()`.
+    private func readerDecorationTemplates() -> [Decoration.Style.Id: HTMLDecorationTemplate] {
+        var templates = HTMLDecorationTemplate.defaultTemplates()
+        templates[.highlight] = .highlight(
+            defaultTint: .yellow,
+            padding: UIEdgeInsets(top: 0, left: 1, bottom: 0, right: 1),
+            lineWeight: 0,
+            cornerRadius: 3,
+            alpha: 0.3
+        )
+        return templates
     }
 
     @MainActor
