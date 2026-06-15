@@ -26,7 +26,7 @@ nonisolated enum ReaderSettings {
     static let defaultPlaybackSpeed = 1.0
     static let defaultPlaybackJumpInterval = 15.0
     static let defaultAutoRewindAfterBackgroundMinutes = 1
-    static let defaultUploadServerPort = 80
+    static let defaultUploadServerPort = 8080
     static let fontSizeRange = 0.8 ... 2.0
     static let lineHeightRange = 1.0 ... 2.0
     static let playbackSpeedRange = 0.5 ... 2.0
