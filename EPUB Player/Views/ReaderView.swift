@@ -21,7 +21,7 @@ struct ReaderView: View {
 
     @State private var state: ReaderState = .loading
     @State private var chapterItems: [ChapterListItem] = []
-    @State private var isChapterDrawerPresented = false
+    @State private var isChapterListPresented = false
     @State private var currentLocationReference: EPUBReference?
     @State private var readingOrderResourceHrefs: [String] = []
     @State private var isPlaybackSpeedControlPresented = false
@@ -65,15 +65,28 @@ struct ReaderView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         dismissBottomControls()
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isChapterDrawerPresented.toggle()
-                        }
+                        isChapterListPresented = true
                     } label: {
                         Image(systemName: "list.bullet")
                     }
                     .accessibilityLabel("Chapters")
                 }
             }
+        }
+        .navigationDestination(isPresented: $isChapterListPresented) {
+            ChapterListScreen(
+                items: chapterItems,
+                selectedItemID: activeChapterItemID,
+                onSelect: { item in
+                    guard case .ready(_, let navigator) = state else {
+                        return
+                    }
+                    isChapterListPresented = false
+                    Task {
+                        await selectChapter(item, navigator: navigator)
+                    }
+                }
+            )
         }
         .task(id: book.id) {
             await openBook()
@@ -269,10 +282,7 @@ struct ReaderView: View {
     @ViewBuilder
     private func readyReaderView(for navigator: EPUBNavigatorViewController) -> some View {
         readerSettingsObservers(for: navigator) {
-            ZStack(alignment: .trailing) {
-                navigatorHost(for: navigator)
-                chapterOverlay(for: navigator)
-            }
+            navigatorHost(for: navigator)
             .onChange(of: playback.currentClipIndex) { oldIndex, newIndex in
                 handleCurrentClipChange(oldIndex: oldIndex, newIndex: newIndex, navigator: navigator)
             }
@@ -438,36 +448,6 @@ struct ReaderView: View {
         }
     }
 
-    @ViewBuilder
-    private func chapterOverlay(for navigator: EPUBNavigatorViewController) -> some View {
-        if isChapterDrawerPresented {
-            Color.black.opacity(0.2)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isChapterDrawerPresented = false
-                    }
-                }
-
-            ChapterDrawer(
-                items: chapterItems,
-                selectedItemID: activeChapterItemID,
-                onSelect: { item in
-                    Task {
-                        await selectChapter(item, navigator: navigator)
-                    }
-                },
-                onClose: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isChapterDrawerPresented = false
-                    }
-                }
-            )
-            .transition(.move(edge: .trailing))
-        }
-    }
-
     @MainActor
     private func loadMediaOverlaysIfAvailable() async {
         await playback.load(for: book, from: try? book.resolvedMediaOverlayJSONURL())
@@ -523,11 +503,6 @@ struct ReaderView: View {
     }
 
     private func bundledFontURL(named filename: String) -> FileURL? {
-        if let url = Bundle.main.url(forResource: filename, withExtension: nil, subdirectory: "Fonts"),
-           let fileURL = FileURL(url: url) {
-            return fileURL
-        }
-
         guard let url = Bundle.main.url(forResource: filename, withExtension: nil) else {
             return nil
         }
@@ -738,10 +713,6 @@ struct ReaderView: View {
 
     @MainActor
     private func selectChapter(_ item: ChapterListItem, navigator: EPUBNavigatorViewController) async {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            isChapterDrawerPresented = false
-        }
-
         let wasPlaying = playback.state.isPlaying
         if let clipIndex = firstClipIndex(for: item.link) {
             let clip = playback.clips[clipIndex]
@@ -866,7 +837,21 @@ struct ReaderView: View {
           const x = \(String(Double(point.x)));
           const y = \(String(Double(point.y)));
 
+          // Hit-test against per-line rectangles (getClientRects), which hug the
+          // rendered glyphs the same way Readium draws its highlight. The single
+          // getBoundingClientRect() box is avoided because a multi-line inline
+          // phrase collapses into one full-width rectangle that includes the
+          // empty space before a mid-line start and after a mid-line end.
+
+          // Distance from point (x, y) to a rectangle (0 when inside).
+          function pointRectDistance(rect) {
+            const dx = Math.max(rect.left - x, 0, x - rect.right);
+            const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+            return Math.sqrt(dx * dx + dy * dy);
+          }
+
           var containing = null;
+          var containingScore = Infinity; // distance from tap to containing line's center
           var nearest = null;
           var nearestDistance = Infinity;
 
@@ -881,26 +866,40 @@ struct ReaderView: View {
               continue;
             }
 
-            const rect = element.getBoundingClientRect();
-            if (rect.width <= 0 && rect.height <= 0) {
+            const lineRects = Array.from(element.getClientRects())
+              .filter(r => r.width > 0 || r.height > 0);
+            if (lineRects.length === 0) {
               continue;
             }
 
-            if (y >= rect.top && y <= rect.bottom && x >= rect.left && x <= rect.right) {
-              if (!containing) {
-                containing = fragmentID;
+            var minDistance = Infinity;
+            for (const r of lineRects) {
+              const distance = pointRectDistance(r);
+              if (distance < minDistance) {
+                minDistance = distance;
+              }
+              if (y >= r.top && y <= r.bottom && x >= r.left && x <= r.right) {
+                // Disambiguate overlapping containers by preferring the line
+                // whose center is closest to the tap.
+                const cx = (r.left + r.right) / 2;
+                const cy = (r.top + r.bottom) / 2;
+                const score = Math.sqrt((cx - x) * (cx - x) + (cy - y) * (cy - y));
+                if (score < containingScore) {
+                  containingScore = score;
+                  containing = fragmentID;
+                }
               }
             }
 
-            const centerY = (rect.top + rect.bottom) / 2;
-            const distance = Math.abs(centerY - y);
-            if (distance < nearestDistance) {
-              nearestDistance = distance;
+            // Nearest by point-to-rect distance (considers both X and Y).
+            if (minDistance < nearestDistance) {
+              nearestDistance = minDistance;
               nearest = fragmentID;
             }
           }
 
-          return JSON.stringify({ fragmentID: containing ?? nearest });
+          const resolved = containing ?? nearest;
+          return JSON.stringify({ fragmentID: resolved });
         })();
         """
 
@@ -1512,7 +1511,7 @@ struct ReaderView: View {
             defaultTint: .yellow,
             padding: UIEdgeInsets(top: 0, left: 1, bottom: 0, right: 1),
             lineWeight: 0,
-            cornerRadius: 3,
+            cornerRadius: 0,
             alpha: 0.3
         )
         return templates
@@ -1629,70 +1628,51 @@ private struct EPUBReference: Equatable {
     let fragmentID: String?
 }
 
-private struct ChapterDrawer: View {
+private struct ChapterListScreen: View {
     let items: [ChapterListItem]
     let selectedItemID: ChapterListItem.ID?
     let onSelect: (ChapterListItem) -> Void
-    let onClose: () -> Void
 
     var body: some View {
-        GeometryReader { proxy in
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("Chapters")
-                        .font(.headline)
-                    Spacer()
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding()
+        Group {
+            if items.isEmpty {
+                ContentUnavailableView(
+                    "No Chapters",
+                    systemImage: "list.bullet.rectangle",
+                    description: Text("This book doesn't expose a table of contents.")
+                )
+            } else {
+                List {
+                    ForEach(items) { item in
+                        let isSelected = selectedItemID == item.id
+                        Button {
+                            onSelect(item)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Text(item.title)
+                                    .fontWeight(isSelected ? .semibold : .regular)
+                                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                Divider()
-
-                if items.isEmpty {
-                    ContentUnavailableView(
-                        "No Chapters",
-                        systemImage: "list.bullet.rectangle",
-                        description: Text("This book doesn't expose a table of contents.")
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(items) { item in
-                                Button {
-                                    onSelect(item)
-                                } label: {
-                                    Text(item.title)
-                                        .fontWeight(selectedItemID == item.id ? .semibold : .regular)
-                                        .foregroundStyle(selectedItemID == item.id ? .blue : .primary)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.vertical, 12)
-                                        .padding(.leading, 16 + CGFloat(item.level * 18))
-                                        .padding(.trailing, 16)
-                                        .background(
-                                            selectedItemID == item.id
-                                                ? Color.blue.opacity(0.1)
-                                                : Color.clear
-                                        )
+                                if isSelected {
+                                    Image(systemName: "checkmark")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(Color.accentColor)
                                 }
-                                .buttonStyle(.plain)
-
-                                Divider()
-                                    .padding(.leading, 16)
                             }
+                            .padding(.leading, CGFloat(item.level * 16))
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                 }
+                .listStyle(.plain)
             }
-            .frame(maxWidth: min(proxy.size.width * 0.82, 360), maxHeight: .infinity, alignment: .top)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 0, style: .continuous))
-            .shadow(color: .black.opacity(0.15), radius: 18, x: -4, y: 0)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
         }
+        .navigationTitle("Chapters")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
