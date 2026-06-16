@@ -57,6 +57,7 @@ private struct PersistedAppState: Codable {
     var fontFamilyRawValue: String
     var themeRawValue: String
     var readAloudColorRawValue: String
+    var readingBackgroundRawValue: String
     var playbackSpeed: Double
     var playbackJumpInterval: Double
     var autoRewindAfterBackgroundMinutes: Int?
@@ -71,6 +72,7 @@ private struct PersistedAppState: Codable {
         case fontFamilyRawValue
         case themeRawValue
         case readAloudColorRawValue
+        case readingBackgroundRawValue
         case playbackSpeed
         case playbackJumpInterval
         case autoRewindAfterBackgroundMinutes
@@ -95,6 +97,7 @@ private struct PersistedAppState: Codable {
         fontFamilyRawValue = container.decodeValue(String.self, forKey: .fontFamilyRawValue, default: defaults.fontFamilyRawValue)
         themeRawValue = container.decodeValue(String.self, forKey: .themeRawValue, default: defaults.themeRawValue)
         readAloudColorRawValue = container.decodeValue(String.self, forKey: .readAloudColorRawValue, default: defaults.readAloudColorRawValue)
+        readingBackgroundRawValue = container.decodeValue(String.self, forKey: .readingBackgroundRawValue, default: defaults.readingBackgroundRawValue)
         playbackSpeed = container.decodeValue(Double.self, forKey: .playbackSpeed, default: defaults.playbackSpeed)
         playbackJumpInterval = container.decodeValue(Double.self, forKey: .playbackJumpInterval, default: defaults.playbackJumpInterval)
         autoRewindAfterBackgroundMinutes = (try? container.decodeIfPresent(Int.self, forKey: .autoRewindAfterBackgroundMinutes)) ?? nil
@@ -110,6 +113,7 @@ private struct PersistedAppState: Codable {
         fontFamilyRawValue: String,
         themeRawValue: String,
         readAloudColorRawValue: String,
+        readingBackgroundRawValue: String,
         playbackSpeed: Double,
         playbackJumpInterval: Double,
         autoRewindAfterBackgroundMinutes: Int?,
@@ -123,6 +127,7 @@ private struct PersistedAppState: Codable {
         self.fontFamilyRawValue = fontFamilyRawValue
         self.themeRawValue = themeRawValue
         self.readAloudColorRawValue = readAloudColorRawValue
+        self.readingBackgroundRawValue = readingBackgroundRawValue
         self.playbackSpeed = playbackSpeed
         self.playbackJumpInterval = playbackJumpInterval
         self.autoRewindAfterBackgroundMinutes = autoRewindAfterBackgroundMinutes
@@ -138,6 +143,7 @@ private struct PersistedAppState: Codable {
         fontFamilyRawValue: "Literata",
         themeRawValue: AppThemeOption.system.rawValue,
         readAloudColorRawValue: ReaderSettings.defaultReadAloudColorHex,
+        readingBackgroundRawValue: ReaderSettings.defaultReadingBackgroundRawValue,
         playbackSpeed: ReaderSettings.defaultPlaybackSpeed,
         playbackJumpInterval: ReaderSettings.defaultPlaybackJumpInterval,
         autoRewindAfterBackgroundMinutes: ReaderSettings.defaultAutoRewindAfterBackgroundMinutes,
@@ -161,6 +167,7 @@ final class AppStateStore: ObservableObject {
     @Published var fontFamilyRawValue = "" { didSet { scheduleSave() } }
     @Published var themeRawValue = AppThemeOption.system.rawValue { didSet { scheduleSave() } }
     @Published var readAloudColorRawValue = ReaderSettings.defaultReadAloudColorHex { didSet { scheduleSave() } }
+    @Published var readingBackgroundRawValue = ReaderSettings.defaultReadingBackgroundRawValue { didSet { scheduleSave() } }
     @Published var playbackSpeed = ReaderSettings.defaultPlaybackSpeed { didSet { scheduleSave() } }
     @Published var playbackJumpInterval = ReaderSettings.defaultPlaybackJumpInterval { didSet { scheduleSave() } }
     @Published var autoRewindAfterBackgroundMinutes = ReaderSettings.defaultAutoRewindAfterBackgroundMinutes { didSet { scheduleSave() } }
@@ -309,6 +316,7 @@ final class AppStateStore: ObservableObject {
         fontFamilyRawValue = persistedState.fontFamilyRawValue
         themeRawValue = persistedState.themeRawValue
         readAloudColorRawValue = persistedState.readAloudColorRawValue
+        readingBackgroundRawValue = persistedState.readingBackgroundRawValue
         playbackSpeed = persistedState.playbackSpeed
         playbackJumpInterval = persistedState.playbackJumpInterval
         autoRewindAfterBackgroundMinutes = ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(
@@ -430,6 +438,7 @@ final class AppStateStore: ObservableObject {
             fontFamilyRawValue: fontFamilyRawValue,
             themeRawValue: themeRawValue,
             readAloudColorRawValue: readAloudColorRawValue,
+            readingBackgroundRawValue: readingBackgroundRawValue,
             playbackSpeed: playbackSpeed,
             playbackJumpInterval: playbackJumpInterval,
             autoRewindAfterBackgroundMinutes: ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(

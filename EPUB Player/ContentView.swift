@@ -784,6 +784,24 @@ private struct SettingsView: View {
                     }
 
                     NavigationLink {
+                        FontSizeSettingView(fontSize: $store.fontSize)
+                            .toolbar(.hidden, for: .tabBar)
+                    } label: {
+                        SettingsNavigationRow(title: "Font Size") {
+                            Text(ReaderSettings.fontSizeText(store.fontSize))
+                        }
+                    }
+
+                    NavigationLink {
+                        LineHeightSettingView(lineHeight: $store.lineHeight)
+                            .toolbar(.hidden, for: .tabBar)
+                    } label: {
+                        SettingsNavigationRow(title: "Line Height") {
+                            Text(ReaderSettings.lineHeightText(store.lineHeight))
+                        }
+                    }
+
+                    NavigationLink {
                         CustomFontsView(onFontsChanged: loadCustomFonts)
                             .toolbar(.hidden, for: .tabBar)
                     } label: {
@@ -822,9 +840,25 @@ private struct SettingsView: View {
                                 }
                         }
                     }
+
+                    NavigationLink {
+                        ReadingBackgroundSelectionView(selectedReadingBackgroundRawValue: $store.readingBackgroundRawValue)
+                            .toolbar(.hidden, for: .tabBar)
+                    } label: {
+                        SettingsNavigationRow(title: "Reading Background") {
+                            Circle()
+                                .fill(selectedReadingBackground.swatchColor)
+                                .frame(width: 22, height: 22)
+                                .overlay {
+                                    Circle()
+                                        .stroke(.black.opacity(0.12), lineWidth: 1)
+                                }
+                        }
+                    }
                 }
 
             }
+            .environment(\.defaultMinListRowHeight, 28)
             .navigationTitle("Settings")
             .onAppear(perform: loadCustomFonts)
         }
@@ -844,6 +878,10 @@ private struct SettingsView: View {
 
     private var selectedThemeName: String {
         ReaderSettings.appTheme(from: store.themeRawValue).name
+    }
+
+    private var selectedReadingBackground: ReadingBackgroundOption {
+        ReaderSettings.readingBackground(from: store.readingBackgroundRawValue)
     }
 
     private func loadCustomFonts() {
@@ -870,6 +908,7 @@ private struct SettingsNavigationRow<Trailing: View>: View {
                 .foregroundStyle(.secondary)
         }
         .contentShape(Rectangle())
+        .listRowInsets(EdgeInsets(top: 3, leading: 16, bottom: 3, trailing: 16))
     }
 }
 
@@ -894,7 +933,51 @@ private struct SkipIntervalSettingView: View {
     }
 }
 
+private struct FontSizeSettingView: View {
+    @Binding var fontSize: Double
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(ReaderSettings.fontSizeOptions, id: \.self) { size in
+                    SettingsSelectionRow(
+                        title: ReaderSettings.fontSizeText(size),
+                        isSelected: ReaderSettings.fontSizeText(size) == ReaderSettings.fontSizeText(fontSize)
+                    ) {
+                        fontSize = size
+                    }
+                }
+            }
+        }
+        .navigationTitle("Font Size")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct LineHeightSettingView: View {
+    @Binding var lineHeight: Double
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(ReaderSettings.lineHeightOptions, id: \.self) { height in
+                    SettingsSelectionRow(
+                        title: ReaderSettings.lineHeightText(height),
+                        isSelected: ReaderSettings.lineHeightText(height) == ReaderSettings.lineHeightText(lineHeight)
+                    ) {
+                        lineHeight = height
+                    }
+                }
+            }
+        }
+        .navigationTitle("Line Height")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 private struct ThemeSelectionView: View {
+    @EnvironmentObject private var store: AppStateStore
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var selectedThemeRawValue: String
 
     var body: some View {
@@ -906,11 +989,56 @@ private struct ThemeSelectionView: View {
                         isSelected: option.rawValue == selectedThemeRawValue
                     ) {
                         selectedThemeRawValue = option.rawValue
+                        store.readingBackgroundRawValue = ReaderSettings.defaultBackground(
+                            forTheme: option,
+                            colorScheme: colorScheme
+                        ).rawValue
                     }
                 }
             }
         }
         .navigationTitle("Theme")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct ReadingBackgroundSelectionView: View {
+    @Binding var selectedReadingBackgroundRawValue: String
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(ReadingBackgroundOption.allCases) { option in
+                    Button {
+                        selectedReadingBackgroundRawValue = option.rawValue
+                    } label: {
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(option.swatchColor)
+                                .frame(width: 22, height: 22)
+                                .overlay {
+                                    Circle()
+                                        .stroke(.black.opacity(0.12), lineWidth: 1)
+                                }
+
+                            Text(option.name)
+
+                            Spacer(minLength: 12)
+
+                            if option.rawValue == selectedReadingBackgroundRawValue {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            } footer: {
+                Text("Recolors the page and text while reading. Changing your Theme resets this to White (Light) or Black (Dark).")
+            }
+        }
+        .navigationTitle("Reading Background")
         .navigationBarTitleDisplayMode(.inline)
     }
 }

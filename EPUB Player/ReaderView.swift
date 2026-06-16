@@ -238,83 +238,116 @@ struct ReaderView: View {
     }
 
     private func readerPreferences() -> EPUBPreferences {
-        EPUBPreferences(
+        let background = ReaderSettings.readingBackground(from: store.readingBackgroundRawValue)
+        let backgroundColor = ReadiumNavigator.Color(hex: background.backgroundHex)
+        let textColor = ReadiumNavigator.Color(hex: background.textHex)
+        return EPUBPreferences(
+            backgroundColor: backgroundColor,
             fontFamily: ReaderSettings.fontFamily(from: store.fontFamilyRawValue),
             fontSize: ReaderSettings.normalizedFontSize(store.fontSize),
             lineHeight: ReaderSettings.normalizedLineHeight(store.lineHeight),
             publisherStyles: false,
             scroll: true,
+            textColor: textColor,
             theme: ReaderSettings.appTheme(from: store.themeRawValue).readiumTheme(for: colorScheme)
         )
     }
 
+    /// Forces the reading background to match the current theme (light -> white,
+    /// dark -> black). System resolves via the device color scheme.
+    @MainActor
+    private func applyThemeBackground() {
+        let background = ReaderSettings.defaultBackground(
+            forTheme: ReaderSettings.appTheme(from: store.themeRawValue),
+            colorScheme: colorScheme
+        )
+        if store.readingBackgroundRawValue != background.rawValue {
+            store.readingBackgroundRawValue = background.rawValue
+        }
+    }
+
     @ViewBuilder
     private func readyReaderView(for navigator: EPUBNavigatorViewController) -> some View {
-        ZStack(alignment: .trailing) {
-            navigatorHost(for: navigator)
-            chapterOverlay(for: navigator)
-        }
-        .onChange(of: playback.currentClipIndex) { oldIndex, newIndex in
-            handleCurrentClipChange(oldIndex: oldIndex, newIndex: newIndex, navigator: navigator)
-        }
-        .onChange(of: playback.state) { oldValue, newValue in
-            if oldValue.isPlaying && !newValue.isPlaying {
-                lastHandledPlaybackStartClipKey = nil
-                return
+        readerSettingsObservers(for: navigator) {
+            ZStack(alignment: .trailing) {
+                navigatorHost(for: navigator)
+                chapterOverlay(for: navigator)
             }
+            .onChange(of: playback.currentClipIndex) { oldIndex, newIndex in
+                handleCurrentClipChange(oldIndex: oldIndex, newIndex: newIndex, navigator: navigator)
+            }
+            .onChange(of: playback.state) { oldValue, newValue in
+                if oldValue.isPlaying && !newValue.isPlaying {
+                    lastHandledPlaybackStartClipKey = nil
+                    return
+                }
 
-            guard !oldValue.isPlaying, newValue.isPlaying else {
-                return
-            }
+                guard !oldValue.isPlaying, newValue.isPlaying else {
+                    return
+                }
 
-            Task {
-                await handleClipPlaybackStartIfNeeded(with: navigator)
+                Task {
+                    await handleClipPlaybackStartIfNeeded(with: navigator)
+                }
             }
-        }
-        .onChange(of: store.fontSize) { _, _ in
-            Task {
-                await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
+            .onChange(of: book.mediaOverlayPreparationState) { _, _ in
+                Task {
+                    await loadMediaOverlaysIfAvailable()
+                }
             }
-        }
-        .onChange(of: store.lineHeight) { _, _ in
-            Task {
-                await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
+            .onChange(of: book.mediaOverlayJSONPath) { _, _ in
+                Task {
+                    await loadMediaOverlaysIfAvailable()
+                }
             }
+            .onPreferenceChange(NavigatorFramePreferenceKey.self) { navigatorFrame = $0 }
+            .onPreferenceChange(PlaybackBarFramePreferenceKey.self) { playbackBarFrame = $0 }
         }
-        .onChange(of: store.fontFamilyRawValue) { _, _ in
-            Task {
-                await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
+    }
+
+    @ViewBuilder
+    private func readerSettingsObservers<Content: View>(
+        for navigator: EPUBNavigatorViewController,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .onChange(of: store.fontSize) { _, _ in
+                Task {
+                    await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
+                }
             }
-        }
-        .onChange(of: store.themeRawValue) { _, _ in
-            applyReaderPreferences(to: navigator)
-        }
-        .onChange(of: store.readAloudColorRawValue) { _, _ in
-            applyCurrentClipDecoration(with: navigator)
-        }
-        .onChange(of: store.playbackSpeed) { _, newValue in
-            playback.setPlaybackRate(newValue)
-        }
-        .onChange(of: store.playbackJumpInterval) { _, newValue in
-            playback.setJumpInterval(newValue)
-        }
-        .onChange(of: book.mediaOverlayPreparationState) { _, _ in
-            Task {
-                await loadMediaOverlaysIfAvailable()
+            .onChange(of: store.lineHeight) { _, _ in
+                Task {
+                    await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
+                }
             }
-        }
-        .onChange(of: book.mediaOverlayJSONPath) { _, _ in
-            Task {
-                await loadMediaOverlaysIfAvailable()
+            .onChange(of: store.fontFamilyRawValue) { _, _ in
+                Task {
+                    await applyReaderPreferencesPreservingViewportAnchor(to: navigator)
+                }
             }
-        }
-        .onChange(of: colorScheme) { _, _ in
-            if ReaderSettings.appTheme(from: store.themeRawValue) == .system {
+            .onChange(of: store.themeRawValue) { _, _ in
+                applyThemeBackground()
                 applyReaderPreferences(to: navigator)
             }
-        }
-        .onPreferenceChange(NavigatorFramePreferenceKey.self) { navigatorFrame = $0 }
-        .onPreferenceChange(PlaybackBarFramePreferenceKey.self) { playbackBarFrame = $0 }
+            .onChange(of: store.readingBackgroundRawValue) { _, _ in
+                applyReaderPreferences(to: navigator)
+            }
+            .onChange(of: store.readAloudColorRawValue) { _, _ in
+                applyCurrentClipDecoration(with: navigator)
+            }
+            .onChange(of: store.playbackSpeed) { _, newValue in
+                playback.setPlaybackRate(newValue)
+            }
+            .onChange(of: store.playbackJumpInterval) { _, newValue in
+                playback.setJumpInterval(newValue)
+            }
+            .onChange(of: colorScheme) { _, _ in
+                if ReaderSettings.appTheme(from: store.themeRawValue) == .system {
+                    applyThemeBackground()
+                    applyReaderPreferences(to: navigator)
+                }
+            }
     }
 
     @ViewBuilder
@@ -360,6 +393,7 @@ struct ReaderView: View {
                 fontSize: $store.fontSize,
                 lineHeight: $store.lineHeight,
                 fontFamilyRawValue: $store.fontFamilyRawValue,
+                readingBackgroundRawValue: $store.readingBackgroundRawValue,
                 customFontFamilies: customFontFamilies,
                 isSpeedControlPresented: $isPlaybackSpeedControlPresented,
                 isReaderSettingsControlPresented: $isReaderSettingsControlPresented,
@@ -1669,6 +1703,7 @@ private struct MediaOverlayPlaybackBar: View {
     @Binding var fontSize: Double
     @Binding var lineHeight: Double
     @Binding var fontFamilyRawValue: String
+    @Binding var readingBackgroundRawValue: String
     let customFontFamilies: [CustomFontStore.ImportedFontFamily]
     @Binding var isSpeedControlPresented: Bool
     @Binding var isReaderSettingsControlPresented: Bool
@@ -1692,6 +1727,7 @@ private struct MediaOverlayPlaybackBar: View {
                             fontSize: $fontSize,
                             lineHeight: $lineHeight,
                             fontFamilyRawValue: $fontFamilyRawValue,
+                            readingBackgroundRawValue: $readingBackgroundRawValue,
                             customFontFamilies: customFontFamilies
                         )
                             .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -1791,6 +1827,7 @@ private struct ReaderTypographyControlPanel: View {
     @Binding var fontSize: Double
     @Binding var lineHeight: Double
     @Binding var fontFamilyRawValue: String
+    @Binding var readingBackgroundRawValue: String
     let customFontFamilies: [CustomFontStore.ImportedFontFamily]
     @State private var panelMode: PanelMode = .typography
 
@@ -1810,6 +1847,8 @@ private struct ReaderTypographyControlPanel: View {
                         step: ReaderSettings.fontSizeStep
                     )
 
+                    Divider()
+
                     ReaderSettingSliderRow(
                         title: "Line Height",
                         valueText: ReaderSettings.lineHeightText(lineHeight),
@@ -1820,6 +1859,8 @@ private struct ReaderTypographyControlPanel: View {
                         range: ReaderSettings.lineHeightRange,
                         step: ReaderSettings.lineHeightStep
                     )
+
+                    Divider()
 
                     Button {
                         panelMode = .fontFamilySelection
@@ -1841,6 +1882,39 @@ private struct ReaderTypographyControlPanel: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+
+                    Divider()
+
+                    HStack(spacing: 12) {
+                        Text("Background")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+
+                        Spacer(minLength: 12)
+
+                        HStack(spacing: 10) {
+                            ForEach(ReadingBackgroundOption.allCases) { option in
+                                Button {
+                                    readingBackgroundRawValue = option.rawValue
+                                } label: {
+                                    Circle()
+                                        .fill(option.swatchColor)
+                                        .frame(width: 26, height: 26)
+                                        .overlay {
+                                            Circle()
+                                                .stroke(
+                                                    isSelected(option) ? Color.primary : Color.black.opacity(0.12),
+                                                    lineWidth: isSelected(option) ? 3 : 1
+                                                )
+                                        }
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(option.name) background")
+                                .accessibilityAddTraits(isSelected(option) ? .isSelected : [])
+                            }
+                        }
+                    }
                 }
 
             case .fontFamilySelection:
@@ -1869,6 +1943,10 @@ private struct ReaderTypographyControlPanel: View {
                 }
             }
         }
+    }
+
+    private func isSelected(_ option: ReadingBackgroundOption) -> Bool {
+        option.rawValue == readingBackgroundRawValue
     }
 }
 
