@@ -23,6 +23,7 @@ nonisolated enum ReaderSettings {
     static let defaultFontSize = 1.2
     static let defaultLineHeight = 1.2
     static let defaultReadAloudColorHex = "#34C759"
+    static let defaultReadingBackgroundRawValue = ReadingBackgroundOption.white.rawValue
     static let defaultPlaybackSpeed = 1.0
     static let defaultPlaybackJumpInterval = 15.0
     static let defaultAutoRewindAfterBackgroundMinutes = 1
@@ -35,6 +36,8 @@ nonisolated enum ReaderSettings {
     static let playbackSpeedStep = 0.1
     static let playbackJumpIntervalOptions = [15.0, 30.0, 45.0, 60.0]
     static let autoRewindAfterBackgroundMinuteOptions = [1, 2, 5, 10]
+    static let fontSizeOptions = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
+    static let lineHeightOptions = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 
     static let builtInFontFamilyOptions: [FontFamilyOption] = [
         FontFamilyOption(name: "Default", value: nil),
@@ -66,6 +69,16 @@ nonisolated enum ReaderSettings {
 
     static func appTheme(from rawValue: String) -> AppThemeOption {
         AppThemeOption(rawValue: rawValue) ?? .system
+    }
+
+    static func readingBackground(from rawValue: String) -> ReadingBackgroundOption {
+        ReadingBackgroundOption(rawValue: rawValue) ?? .white
+    }
+
+    /// Reading background that pairs with the given theme. System resolves
+    /// light/dark via the supplied color scheme.
+    static func defaultBackground(forTheme theme: AppThemeOption, colorScheme: ColorScheme) -> ReadingBackgroundOption {
+        theme.readiumTheme(for: colorScheme) == .dark ? .black : .white
     }
 
     static func normalizedFontSize(_ value: Double) -> Double {
@@ -289,6 +302,70 @@ nonisolated struct ReadAloudColorHSB: Equatable {
     let brightness: Double
 
     static let `default` = ReadAloudColorHSB(hue: 0.4, saturation: 0.74, brightness: 0.78)
+}
+
+enum ReadingBackgroundOption: String, CaseIterable, Identifiable {
+    case white
+    case sepia
+    case gray
+    case darkGray
+    case black
+
+    var id: String {
+        rawValue
+    }
+
+    var name: String {
+        switch self {
+        case .white:
+            return "White"
+        case .sepia:
+            return "Sepia"
+        case .gray:
+            return "Gray"
+        case .darkGray:
+            return "Dark Gray"
+        case .black:
+            return "Black"
+        }
+    }
+
+    /// Background hex applied to the rendered page.
+    var backgroundHex: String {
+        switch self {
+        case .white:
+            return "#FFFFFF"
+        case .sepia:
+            return "#FAF4E8"
+        case .gray:
+            return "#EDEDED"
+        case .darkGray:
+            return "#2B2B2B"
+        case .black:
+            return "#000000"
+        }
+    }
+
+    /// Text hex paired with the background for readability.
+    var textHex: String {
+        switch self {
+        case .white:
+            return "#121212"
+        case .sepia:
+            return "#5B4636"
+        case .gray:
+            return "#1A1A1A"
+        case .darkGray:
+            return "#E8E8E8"
+        case .black:
+            return "#FEFEFE"
+        }
+    }
+
+    /// Swatch color shown in selection UI.
+    var swatchColor: SwiftUI.Color {
+        ReaderSettings.color(from: backgroundHex)
+    }
 }
 
 enum AppThemeOption: String, CaseIterable, Identifiable {
