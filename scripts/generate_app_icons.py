@@ -12,16 +12,6 @@ ICON_SPECS = [
     ("AppIcon-iOS-1024.png", 1024, "base"),
     ("AppIcon-iOS-1024-dark.png", 1024, "dark"),
     ("AppIcon-iOS-1024-tinted.png", 1024, "tinted"),
-    ("AppIcon-mac-16.png", 16, "base"),
-    ("AppIcon-mac-16@2x.png", 32, "base"),
-    ("AppIcon-mac-32.png", 32, "base"),
-    ("AppIcon-mac-32@2x.png", 64, "base"),
-    ("AppIcon-mac-128.png", 128, "base"),
-    ("AppIcon-mac-128@2x.png", 256, "base"),
-    ("AppIcon-mac-256.png", 256, "base"),
-    ("AppIcon-mac-256@2x.png", 512, "base"),
-    ("AppIcon-mac-512.png", 512, "base"),
-    ("AppIcon-mac-512@2x.png", 1024, "base"),
 ]
 
 CONTENTS_JSON = {
@@ -41,22 +31,12 @@ CONTENTS_JSON = {
             "platform": "ios",
             "size": "1024x1024",
         },
-        {"filename": "AppIcon-mac-16.png", "idiom": "mac", "scale": "1x", "size": "16x16"},
-        {"filename": "AppIcon-mac-16@2x.png", "idiom": "mac", "scale": "2x", "size": "16x16"},
-        {"filename": "AppIcon-mac-32.png", "idiom": "mac", "scale": "1x", "size": "32x32"},
-        {"filename": "AppIcon-mac-32@2x.png", "idiom": "mac", "scale": "2x", "size": "32x32"},
-        {"filename": "AppIcon-mac-128.png", "idiom": "mac", "scale": "1x", "size": "128x128"},
-        {"filename": "AppIcon-mac-128@2x.png", "idiom": "mac", "scale": "2x", "size": "128x128"},
-        {"filename": "AppIcon-mac-256.png", "idiom": "mac", "scale": "1x", "size": "256x256"},
-        {"filename": "AppIcon-mac-256@2x.png", "idiom": "mac", "scale": "2x", "size": "256x256"},
-        {"filename": "AppIcon-mac-512.png", "idiom": "mac", "scale": "1x", "size": "512x512"},
-        {"filename": "AppIcon-mac-512@2x.png", "idiom": "mac", "scale": "2x", "size": "512x512"},
     ],
     "info": {"author": "xcode", "version": 1},
 }
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUTPUT = REPO_ROOT / "Immersive Reader/Assets.xcassets/AppIcon.appiconset"
+DEFAULT_OUTPUT = REPO_ROOT / "EPUB Player/Assets.xcassets/AppIcon.appiconset"
 
 try:
     RESAMPLE = Image.Resampling.LANCZOS

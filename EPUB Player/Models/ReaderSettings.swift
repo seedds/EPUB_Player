@@ -368,7 +368,7 @@ enum ReadingBackgroundOption: String, CaseIterable, Identifiable {
     }
 }
 
-enum AppThemeOption: String, CaseIterable, Identifiable {
+nonisolated enum AppThemeOption: String, CaseIterable, Identifiable {
     case system
     case light
     case dark
