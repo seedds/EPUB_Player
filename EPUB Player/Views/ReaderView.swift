@@ -23,6 +23,7 @@ struct ReaderView: View {
     @State private var chapterItems: [ChapterListItem] = []
     @State private var isChapterListPresented = false
     @State private var currentLocationReference: EPUBReference?
+    @State private var currentChapterProgress: Double?
     @State private var readingOrderResourceHrefs: [String] = []
     @State private var isPlaybackSpeedControlPresented = false
     @State private var isReaderSettingsControlPresented = false
@@ -63,21 +64,32 @@ struct ReaderView: View {
         .toolbar {
             if case .ready = state {
                 ToolbarItem(placement: .topBarTrailing) {
+                    let isBookmarked = isCurrentLocationBookmarked
+                    Button {
+                        toggleBookmarkAtCurrentLocation()
+                    } label: {
+                        Image(systemName: isBookmarked ? "bookmark.fill" : "bookmark")
+                    }
+                    .accessibilityLabel(isBookmarked ? "Remove Bookmark" : "Add Bookmark")
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         dismissBottomControls()
                         isChapterListPresented = true
                     } label: {
                         Image(systemName: "list.bullet")
                     }
-                    .accessibilityLabel("Chapters")
+                    .accessibilityLabel("Chapters & Bookmarks")
                 }
             }
         }
         .navigationDestination(isPresented: $isChapterListPresented) {
-            ChapterListScreen(
+            ChapterAndBookmarkScreen(
                 items: chapterItems,
                 selectedItemID: activeChapterItemID,
-                onSelect: { item in
+                bookmarks: book.bookmarks.sorted { $0.createdAt > $1.createdAt },
+                onSelectChapter: { item in
                     guard case .ready(_, let navigator) = state else {
                         return
                     }
@@ -85,6 +97,18 @@ struct ReaderView: View {
                     Task {
                         await selectChapter(item, navigator: navigator)
                     }
+                },
+                onSelectBookmark: { bookmark in
+                    guard case .ready(_, let navigator) = state else {
+                        return
+                    }
+                    isChapterListPresented = false
+                    Task {
+                        await goToBookmark(bookmark, navigator: navigator)
+                    }
+                },
+                onDeleteBookmarks: { ids in
+                    book.bookmarks.removeAll { ids.contains($0.id) }
                 }
             )
         }
@@ -685,6 +709,7 @@ struct ReaderView: View {
     @MainActor
     private func handleLocationDidChange(_ locator: Locator, navigator: EPUBNavigatorViewController) {
         currentLocationReference = normalizedReference(for: locator.href.string)
+        currentChapterProgress = locator.locations.progression
         applyDeferredCurrentClipDecorationIfNeeded(with: navigator)
         guard !isSuppressingLocationPersistence else {
             return
@@ -715,6 +740,171 @@ struct ReaderView: View {
         }
 
         _ = await navigator.go(to: locator, options: .animated)
+    }
+
+    private var isCurrentLocationBookmarked: Bool {
+        matchingBookmark() != nil
+    }
+
+    /// The bookmark representing the current reading position, if one exists.
+    /// When a clip is active, matches on the clip's identity; otherwise matches
+    /// a location bookmark in the same resource within a small progress window.
+    private func matchingBookmark() -> Bookmark? {
+        if let clip = playback.currentClip {
+            let clipResourceHref = normalizedResourceHref(for: clip.textResourceHref)
+            return book.bookmarks.first { bookmark in
+                guard let bookmarkResourceHref = bookmark.textResourceHref else {
+                    return false
+                }
+                return normalizedResourceHref(for: bookmarkResourceHref) == clipResourceHref &&
+                    bookmark.fragmentID == clip.fragmentID &&
+                    bookmark.clipBegin == clip.clipBegin &&
+                    bookmark.clipEnd == clip.clipEnd
+            }
+        }
+
+        guard let currentLocationReference else {
+            return nil
+        }
+
+        return book.bookmarks.first { bookmark in
+            guard bookmark.textResourceHref == nil,
+                  let bookmarkResourceHref = bookmark.resourceHref,
+                  normalizedResourceHref(for: bookmarkResourceHref) == currentLocationReference.resourceHref
+            else {
+                return false
+            }
+
+            let current = currentChapterProgress ?? 0
+            let saved = bookmark.chapterProgress ?? 0
+            return abs(current - saved) <= 0.01
+        }
+    }
+
+    @MainActor
+    private func toggleBookmarkAtCurrentLocation() {
+        guard case .ready(_, let navigator) = state,
+              let locator = navigator.currentLocation
+        else {
+            return
+        }
+
+        if let existing = matchingBookmark() {
+            book.bookmarks.removeAll { $0.id == existing.id }
+            store.persistNow()
+            return
+        }
+
+        let reference = normalizedReference(for: locator.href.string)
+        let chapterTitle = chapterItems.last { item in
+            normalizedResourceHref(for: item.link.href) == reference.resourceHref
+        }?.title
+
+        var bookmark = Bookmark(
+            chapterTitle: chapterTitle,
+            locatorJSON: locator.jsonString,
+            resourceHref: reference.resourceHref,
+            chapterProgress: locator.locations.progression,
+            totalProgress: locator.locations.totalProgression
+        )
+
+        if let clipIndex = playback.currentClipIndex,
+           playback.clips.indices.contains(clipIndex) {
+            let clip = playback.clips[clipIndex]
+            bookmark.textResourceHref = clip.textResourceHref
+            bookmark.fragmentID = clip.fragmentID
+            bookmark.clipBegin = clip.clipBegin
+            bookmark.clipEnd = clip.clipEnd
+
+            let clipResourceHref = normalizedResourceHref(for: clip.textResourceHref)
+            let chapterClipIndices = playback.clips.indices.filter { index in
+                normalizedResourceHref(for: playback.clips[index].textResourceHref) == clipResourceHref
+            }
+            bookmark.clipCountInChapter = chapterClipIndices.count
+            bookmark.clipNumberInChapter = chapterClipIndices.firstIndex(of: clipIndex).map { $0 + 1 }
+        }
+
+        let bookmarkToAppend = bookmark
+        Task { @MainActor in
+            let clipText = await readCurrentClipText(with: navigator)
+            var stored = bookmarkToAppend
+            stored.clipText = clipText
+            book.bookmarks.append(stored)
+            store.persistNow()
+        }
+    }
+
+    @MainActor
+    private func readCurrentClipText(with navigator: EPUBNavigatorViewController) async -> String? {
+        guard let clip = playback.currentClip,
+              let fragmentID = clip.fragmentID,
+              !fragmentID.isEmpty
+        else {
+            return nil
+        }
+
+        let fragmentIDLiteral = javaScriptStringLiteral(fragmentID)
+        let script = """
+        (() => {
+          const element = document.getElementById(\(fragmentIDLiteral));
+          if (!element) {
+            return "";
+          }
+          return (element.textContent || "").replace(/\\s+/g, " ").trim();
+        })();
+        """
+
+        let result = await navigator.evaluateJavaScript(script)
+        guard case .success(let value) = result,
+              let text = value as? String,
+              !text.isEmpty
+        else {
+            return nil
+        }
+        return text
+    }
+
+    @MainActor
+    private func goToBookmark(_ bookmark: Bookmark, navigator: EPUBNavigatorViewController) async {
+        if let clipIndex = bookmarkClipIndex(for: bookmark) {
+            let wasPlaying = playback.state.isPlaying
+            let clip = playback.clips[clipIndex]
+            pendingChapterEntryPlaybackStartClipKey = playbackStartClipKey(for: clip)
+            if let locator = playbackLocator(for: clip) {
+                _ = await navigator.go(to: locator, options: .animated)
+            }
+            playback.selectClip(at: clipIndex, autoplay: wasPlaying, reason: "bookmarkSelect")
+            applyCurrentClipDecoration(with: navigator)
+            return
+        }
+
+        guard let locatorJSON = bookmark.locatorJSON,
+              let locator = (try? Locator(jsonString: locatorJSON)) ?? nil
+        else {
+            return
+        }
+        _ = await navigator.go(to: locator, options: .animated)
+    }
+
+    private func bookmarkClipIndex(for bookmark: Bookmark) -> Int? {
+        guard let textResourceHref = bookmark.textResourceHref else {
+            return nil
+        }
+
+        let resourceHref = normalizedResourceHref(for: textResourceHref)
+        if let exactMatch = playback.clips.firstIndex(where: { clip in
+            normalizedResourceHref(for: clip.textResourceHref) == resourceHref &&
+            clip.fragmentID == bookmark.fragmentID &&
+            clip.clipBegin == bookmark.clipBegin &&
+            clip.clipEnd == bookmark.clipEnd
+        }) {
+            return exactMatch
+        }
+
+        return playback.clips.firstIndex(where: { clip in
+            normalizedResourceHref(for: clip.textResourceHref) == resourceHref &&
+            clip.fragmentID == bookmark.fragmentID
+        })
     }
 
     @MainActor
@@ -1634,6 +1824,51 @@ private struct EPUBReference: Equatable {
     let fragmentID: String?
 }
 
+private enum ChapterBookmarkTab: Hashable {
+    case chapters
+    case bookmarks
+}
+
+private struct ChapterAndBookmarkScreen: View {
+    let items: [ChapterListItem]
+    let selectedItemID: ChapterListItem.ID?
+    let bookmarks: [Bookmark]
+    let onSelectChapter: (ChapterListItem) -> Void
+    let onSelectBookmark: (Bookmark) -> Void
+    let onDeleteBookmarks: (Set<Bookmark.ID>) -> Void
+
+    @State private var selectedTab: ChapterBookmarkTab = .chapters
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("View", selection: $selectedTab) {
+                Text("Chapters").tag(ChapterBookmarkTab.chapters)
+                Text("Bookmarks").tag(ChapterBookmarkTab.bookmarks)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            switch selectedTab {
+            case .chapters:
+                ChapterListScreen(
+                    items: items,
+                    selectedItemID: selectedItemID,
+                    onSelect: onSelectChapter
+                )
+            case .bookmarks:
+                BookmarkListScreen(
+                    bookmarks: bookmarks,
+                    onSelect: onSelectBookmark,
+                    onDelete: onDeleteBookmarks
+                )
+            }
+        }
+        .navigationTitle("Contents")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 private struct ChapterListScreen: View {
     let items: [ChapterListItem]
     let selectedItemID: ChapterListItem.ID?
@@ -1677,8 +1912,85 @@ private struct ChapterListScreen: View {
                 .listStyle(.plain)
             }
         }
-        .navigationTitle("Chapters")
-        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct BookmarkListScreen: View {
+    let bookmarks: [Bookmark]
+    let onSelect: (Bookmark) -> Void
+    let onDelete: (Set<Bookmark.ID>) -> Void
+
+    var body: some View {
+        Group {
+            if bookmarks.isEmpty {
+                ContentUnavailableView(
+                    "No Bookmarks",
+                    systemImage: "bookmark",
+                    description: Text("Tap the bookmark button while reading to save your place.")
+                )
+            } else {
+                List {
+                    ForEach(bookmarks) { bookmark in
+                        Button {
+                            onSelect(bookmark)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(primaryText(for: bookmark))
+                                    .foregroundStyle(Color.primary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                Text(secondaryText(for: bookmark))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .onDelete { offsets in
+                        let ids = Set(offsets.map { bookmarks[$0].id })
+                        onDelete(ids)
+                    }
+                }
+                .listStyle(.plain)
+            }
+        }
+    }
+
+    private func primaryText(for bookmark: Bookmark) -> String {
+        if let clipText = bookmark.clipText, !clipText.isEmpty {
+            return clipText
+        }
+        if let chapterTitle = bookmark.chapterTitle, !chapterTitle.isEmpty {
+            return chapterTitle
+        }
+        return "Bookmark"
+    }
+
+    private func secondaryText(for bookmark: Bookmark) -> String {
+        var parts: [String] = []
+
+        let hasClipText = (bookmark.clipText?.isEmpty == false)
+        if hasClipText,
+           let chapterTitle = bookmark.chapterTitle,
+           !chapterTitle.isEmpty {
+            parts.append(chapterTitle)
+        }
+
+        if let number = bookmark.clipNumberInChapter,
+           let total = bookmark.clipCountInChapter {
+            parts.append("Clip \(number)/\(total)")
+        }
+
+        if let progress = bookmark.chapterProgress {
+            parts.append("\(Int((progress * 100).rounded()))%")
+        }
+
+        parts.append(bookmark.createdAt.formatted(date: .abbreviated, time: .shortened))
+        return parts.joined(separator: " · ")
     }
 }
 
