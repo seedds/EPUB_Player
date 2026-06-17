@@ -120,7 +120,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
     }
 
-    nonisolated private static func resolvedClips(from jsonURL: URL) throws -> [EPUBMediaOverlayClip] {
+    nonisolated static func resolvedClips(from jsonURL: URL) throws -> [EPUBMediaOverlayClip] {
         let data = try Data(contentsOf: jsonURL)
         let manifest = try JSONDecoder().decode(EPUBMediaOverlayManifest.self, from: data)
         return manifest.documents.flatMap(\.clips)

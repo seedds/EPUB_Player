@@ -835,7 +835,14 @@ enum BookAssetCacheService {
         guard let overlayURL = try? book.resolvedMediaOverlayJSONURL() else {
             return false
         }
-        return FileManager.default.fileExists(atPath: overlayURL.path)
+        // Existence alone is insufficient: a corrupt or stale manifest is treated
+        // as ready and silently fails at playback load. Decode it (via the same
+        // path the playback controller uses) so re-preparation gates can detect
+        // an unusable cache and regenerate it.
+        guard let clips = try? MediaOverlayPlaybackController.resolvedClips(from: overlayURL) else {
+            return false
+        }
+        return !clips.isEmpty
     }
 
     nonisolated static func materializeAudioAsset(
