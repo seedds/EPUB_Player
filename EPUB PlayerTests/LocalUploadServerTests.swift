@@ -16,4 +16,33 @@ final class LocalUploadServerTests: XCTestCase {
         XCTAssertNil(UploadFileKind(filename: "noextension"))
         XCTAssertNil(UploadFileKind(filename: ""))
     }
+
+    // MARK: - UploadServerAuthConfig
+
+    func testOpenConfigAlwaysAuthorized() {
+        let config = UploadServerAuthConfig.open
+        XCTAssertTrue(config.isAuthorized(token: nil))
+        XCTAssertTrue(config.isAuthorized(token: ""))
+        XCTAssertTrue(config.isAuthorized(token: "anything"))
+    }
+
+    func testProtectedConfigRequiresMatchingToken() {
+        let config = UploadServerAuthConfig.makeProtected(password: "secret")
+        XCTAssertFalse(config.isAuthorized(token: nil),    "nil token must be rejected")
+        XCTAssertFalse(config.isAuthorized(token: ""),     "empty token must be rejected")
+        XCTAssertFalse(config.isAuthorized(token: "wrong"), "wrong token must be rejected")
+        XCTAssertTrue(config.isAuthorized(token: config.sessionToken), "correct token must be accepted")
+    }
+
+    func testEachProtectedConfigHasUniqueToken() {
+        let a = UploadServerAuthConfig.makeProtected(password: "pw")
+        let b = UploadServerAuthConfig.makeProtected(password: "pw")
+        XCTAssertNotEqual(a.sessionToken, b.sessionToken, "each server start should produce a distinct token")
+    }
+
+    func testProtectedConfigDoesNotAcceptTokenFromDifferentConfig() {
+        let a = UploadServerAuthConfig.makeProtected(password: "pw")
+        let b = UploadServerAuthConfig.makeProtected(password: "pw")
+        XCTAssertFalse(b.isAuthorized(token: a.sessionToken), "token from another server instance must be rejected")
+    }
 }

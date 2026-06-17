@@ -25,6 +25,29 @@ enum LocalUploadServerError: LocalizedError {
     }
 }
 
+// Immutable auth configuration passed to each connection.
+struct UploadServerAuthConfig {
+    let requiresPassword: Bool
+    let password: String
+    // Random token generated at server start; valid for the lifetime of
+    // this server instance.  Cleared implicitly when the server stops.
+    let sessionToken: String
+
+    static let open = UploadServerAuthConfig(requiresPassword: false, password: "", sessionToken: "")
+
+    static func makeProtected(password: String) -> UploadServerAuthConfig {
+        let token = UUID().uuidString + UUID().uuidString
+        return UploadServerAuthConfig(requiresPassword: true, password: password, sessionToken: token)
+    }
+
+    // Pure function so it is easily unit-tested without spinning up a server.
+    func isAuthorized(token: String?) -> Bool {
+        guard requiresPassword else { return true }
+        guard let token, !token.isEmpty else { return false }
+        return token == sessionToken
+    }
+}
+
 final class LocalUploadServer {
     typealias APICompletion = (Result<Data, Error>) -> Void
 
@@ -37,6 +60,7 @@ final class LocalUploadServer {
     }
 
     let port: UInt16
+    let authConfig: UploadServerAuthConfig
     var onUploadStarted: ((UploadTransferSnapshot) -> Void)?
     var onUploadProgress: ((UploadTransferSnapshot) -> Void)?
     var onUploadFinished: ((UUID, URL, String) -> Void)?
@@ -51,8 +75,9 @@ final class LocalUploadServer {
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: HTTPUploadConnection] = [:]
 
-    init(port: UInt16 = 80) {
+    init(port: UInt16 = 80, authConfig: UploadServerAuthConfig = .open) {
         self.port = port
+        self.authConfig = authConfig
         queue.setSpecific(key: queueKey, value: ())
     }
 
@@ -108,7 +133,7 @@ final class LocalUploadServer {
     }
 
     private func accept(_ connection: NWConnection) {
-        let uploadConnection = HTTPUploadConnection(connection: connection)
+        let uploadConnection = HTTPUploadConnection(connection: connection, authConfig: authConfig)
         let id = ObjectIdentifier(uploadConnection)
         connections[id] = uploadConnection
 
@@ -211,6 +236,7 @@ private final class HTTPUploadConnection {
     var onComplete: (() -> Void)?
 
     private let connection: NWConnection
+    private let authConfig: UploadServerAuthConfig
     private var headerData = Data()
     private var uploadFileHandle: FileHandle?
     private var uploadTempURL: URL?
@@ -220,8 +246,9 @@ private final class HTTPUploadConnection {
     private var expectedBodyLength: Int64 = 0
     private var receivedBodyLength: Int64 = 0
 
-    init(connection: NWConnection) {
+    init(connection: NWConnection, authConfig: UploadServerAuthConfig) {
         self.connection = connection
+        self.authConfig = authConfig
     }
 
     func start(queue: DispatchQueue) {
@@ -291,8 +318,26 @@ private final class HTTPUploadConnection {
         let target = requestParts[1]
         let headers = parseHeaders(lines.dropFirst())
 
+        // Auth: POST /api/auth is the one unauthenticated route (besides the
+        // login page served below). Everything else requires a valid token when
+        // a password is configured.
+        if method == "POST", target == "/api/auth" {
+            handleAuthRequest(headers: headers)
+            return
+        }
+
+        // GET / is always served — it contains both the login card and the
+        // upload UI; the page itself decides which to show based on the token
+        // stored in sessionStorage.  All data-bearing routes still require a
+        // valid token via X-EPUBPlayer-Token.
         if method == "GET" || method == "HEAD", target == "/" {
             finishWithHTML(uploadPageHTML)
+            return
+        }
+
+        let token = headers["x-epubplayer-token"]
+        if !authConfig.isAuthorized(token: token) {
+            finishWithHTTP(status: 401, body: "Unauthorized")
             return
         }
 
@@ -349,6 +394,25 @@ private final class HTTPUploadConnection {
         } else {
             receiveBody()
         }
+    }
+
+    private func handleAuthRequest(headers: [String: String]) {
+        guard authConfig.requiresPassword else {
+            // No password configured — any request succeeds and returns an
+            // empty token (the client will include it but the server ignores it).
+            let payload = Data("{\"token\":\"\"}".utf8)
+            finishWithJSON(payload)
+            return
+        }
+
+        let provided = headers["x-epubplayer-password"] ?? ""
+        guard provided == authConfig.password else {
+            finishWithHTTP(status: 401, body: "Incorrect password")
+            return
+        }
+
+        let tokenJSON = "{\"token\":\"\(authConfig.sessionToken)\"}"
+        finishWithJSON(Data(tokenJSON.utf8))
     }
 
     private func requestBooks() {
@@ -607,6 +671,7 @@ private final class HTTPUploadConnection {
         switch status {
         case 200: "OK"
         case 400: "Bad Request"
+        case 401: "Unauthorized"
         case 404: "Not Found"
         case 405: "Method Not Allowed"
         case 411: "Length Required"
@@ -617,7 +682,8 @@ private final class HTTPUploadConnection {
     }
 
     private var uploadPageHTML: String {
-        """
+        let requiresPasswordLiteral = authConfig.requiresPassword ? "true" : "false"
+        return """
         <!doctype html>
         <html>
         <head>
@@ -627,6 +693,21 @@ private final class HTTPUploadConnection {
             :root { color-scheme: light; }
             * { box-sizing: border-box; }
             body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; min-height: 100vh; background: #f5f1e8; color: #211a12; }
+            /* Login view */
+            #login-view { display: none; min-height: 100vh; align-items: center; justify-content: center; }
+            #login-view.visible { display: flex; }
+            .login-card { background: white; border-radius: 24px; padding: 32px 28px; box-shadow: 0 24px 80px rgba(60,38,15,.14); width: min(380px, calc(100vw - 32px)); }
+            .login-card h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -.03em; }
+            .login-card p { color: #6b6258; line-height: 1.5; margin: 0 0 20px; font-size: 15px; }
+            .login-card label { display: block; font-weight: 700; margin-bottom: 6px; font-size: 15px; }
+            .login-card input { width: 100%; border: 1.5px solid #d8c7ad; border-radius: 10px; padding: 10px 12px; font-size: 17px; outline: none; background: #fffaf1; }
+            .login-card input:focus { border-color: #1e5bff; }
+            .login-card button { margin-top: 14px; width: 100%; border: 0; border-radius: 999px; padding: 12px; background: #1e5bff; color: white; font-weight: 700; font-size: 16px; cursor: pointer; }
+            .login-card button:disabled { opacity: .45; cursor: not-allowed; }
+            #login-error { margin-top: 12px; color: #c93528; font-weight: 700; min-height: 20px; font-size: 14px; }
+            /* App view */
+            #app-view { display: none; }
+            #app-view.visible { display: block; }
             main { width: min(980px, calc(100vw - 32px)); margin: 32px auto; }
             header { margin-bottom: 22px; }
             h1 { margin: 0 0 8px; font-size: clamp(32px, 7vw, 56px); letter-spacing: -.04em; }
@@ -674,35 +755,124 @@ private final class HTTPUploadConnection {
           </style>
         </head>
         <body>
-          <div class="page-drop-overlay">Drop EPUB or font files to start uploading</div>
-          <main>
-            <header>
+          <!-- Login view (shown when password is required and not yet authenticated) -->
+          <div id="login-view">
+            <div class="login-card">
               <h1>EPUB Player Files</h1>
-              <p>Upload EPUB books or custom font files. Keep EPUB Player open while managing files.</p>
-            </header>
+              <p>This server is password-protected. Enter the password set in the EPUB Player app to continue.</p>
+              <label for="password-input">Password</label>
+              <input id="password-input" type="password" autocomplete="current-password">
+              <button id="login-submit">Connect</button>
+              <div id="login-error"></div>
+            </div>
+          </div>
 
-            <section>
-              <h2>Upload Files</h2>
-              <div class="drop" id="drop-zone">
-                <strong>Drop .epub, .ttf, or .otf files anywhere on this page</strong>
-                <p>EPUBs are imported into your library. Fonts are imported into Reader &gt; Custom Fonts.</p>
-                <input id="file" type="file" accept=".epub,.ttf,.otf,application/epub+zip,font/ttf,font/otf,font/sfnt" multiple>
-                <div id="status"></div>
-              </div>
-              <div id="queue" class="queue">
-                <div class="empty">No uploads queued yet.</div>
-              </div>
-            </section>
+          <!-- App view (shown when authenticated or no password required) -->
+          <div id="app-view">
+            <div class="page-drop-overlay">Drop EPUB or font files to start uploading</div>
+            <main>
+              <header>
+                <h1>EPUB Player Files</h1>
+                <p>Upload EPUB books or custom font files. Keep EPUB Player open while managing files.</p>
+              </header>
 
-            <section>
-              <div class="toolbar">
-                <h2>Files on iPhone</h2>
-                <button class="secondary" id="refresh">Refresh</button>
-              </div>
-              <div id="books" class="books"></div>
-            </section>
-          </main>
+              <section>
+                <h2>Upload Files</h2>
+                <div class="drop" id="drop-zone">
+                  <strong>Drop .epub, .ttf, or .otf files anywhere on this page</strong>
+                  <p>EPUBs are imported into your library. Fonts are imported into Reader &gt; Custom Fonts.</p>
+                  <input id="file" type="file" accept=".epub,.ttf,.otf,application/epub+zip,font/ttf,font/otf,font/sfnt" multiple>
+                  <div id="status"></div>
+                </div>
+                <div id="queue" class="queue">
+                  <div class="empty">No uploads queued yet.</div>
+                </div>
+              </section>
+
+              <section>
+                <div class="toolbar">
+                  <h2>Files on iPhone</h2>
+                  <button class="secondary" id="refresh">Refresh</button>
+                </div>
+                <div id="books" class="books"></div>
+              </section>
+            </main>
+          </div>
+
           <script>
+            const REQUIRES_PASSWORD = \(requiresPasswordLiteral);
+
+            // View switching — no page reloads needed.
+            function showLogin() {
+              document.getElementById('login-view').classList.add('visible');
+              document.getElementById('app-view').classList.remove('visible');
+              const input = document.getElementById('password-input');
+              input.value = '';
+              document.getElementById('login-error').textContent = '';
+              input.focus();
+            }
+
+            function showApp() {
+              document.getElementById('login-view').classList.remove('visible');
+              document.getElementById('app-view').classList.add('visible');
+            }
+
+            // Token helpers.
+            function getToken() {
+              return sessionStorage.getItem('epubplayer-token') || '';
+            }
+
+            // Called when a data request receives 401 (stale/invalid token).
+            function handleUnauthorized() {
+              sessionStorage.removeItem('epubplayer-token');
+              if (REQUIRES_PASSWORD) {
+                showLogin();
+              }
+            }
+
+            // Login form.
+            const loginSubmit = document.getElementById('login-submit');
+            const passwordInput = document.getElementById('password-input');
+            const loginError = document.getElementById('login-error');
+
+            async function attemptLogin() {
+              const password = passwordInput.value;
+              if (!password) {
+                loginError.textContent = 'Enter a password.';
+                return;
+              }
+
+              loginSubmit.disabled = true;
+              loginError.textContent = '';
+
+              try {
+                const response = await fetch('/api/auth', {
+                  method: 'POST',
+                  headers: { 'X-EPUBPlayer-Password': password }
+                });
+                if (response.ok) {
+                  const payload = await response.json();
+                  sessionStorage.setItem('epubplayer-token', payload.token || '');
+                  showApp();
+                  renderQueue();
+                  loadBooks();
+                } else {
+                  loginError.textContent = 'Incorrect password. Try again.';
+                  passwordInput.select();
+                }
+              } catch {
+                loginError.textContent = 'Could not reach the server. Make sure the app is open.';
+              } finally {
+                loginSubmit.disabled = false;
+              }
+            }
+
+            loginSubmit.addEventListener('click', attemptLogin);
+            passwordInput.addEventListener('keydown', event => {
+              if (event.key === 'Enter') attemptLogin();
+            });
+
+            // App state.
             const input = document.getElementById('file');
             const refresh = document.getElementById('refresh');
             const queue = document.getElementById('queue');
@@ -882,6 +1052,7 @@ private final class HTTPUploadConnection {
                 const request = new XMLHttpRequest();
                 request.open('POST', '/upload?filename=' + encodeURIComponent(item.name));
                 request.setRequestHeader('Content-Type', contentTypeForKind(item.kind));
+                request.setRequestHeader('X-EPUBPlayer-Token', getToken());
 
                 request.upload.onprogress = event => {
                   item.uploadedBytes = event.loaded || 0;
@@ -898,6 +1069,12 @@ private final class HTTPUploadConnection {
                 request.onload = async () => {
                   item.speedBytesPerSecond = 0;
                   item.uploadedBytes = item.totalBytes || item.size || item.uploadedBytes;
+
+                  if (request.status === 401) {
+                    handleUnauthorized();
+                    resolve();
+                    return;
+                  }
 
                   if (request.status >= 200 && request.status < 300) {
                     item.status = 'done';
@@ -977,7 +1154,12 @@ private final class HTTPUploadConnection {
             }
 
             async function requestText(url, options = {}) {
-              const response = await fetch(url, options);
+              const mergedHeaders = Object.assign({ 'X-EPUBPlayer-Token': getToken() }, options.headers || {});
+              const response = await fetch(url, Object.assign({}, options, { headers: mergedHeaders }));
+              if (response.status === 401) {
+                handleUnauthorized();
+                throw new Error('Session expired. Please reconnect.');
+              }
               if (!response.ok) {
                 throw new Error(await response.text());
               }
@@ -1081,8 +1263,15 @@ private final class HTTPUploadConnection {
             });
 
             refresh.onclick = loadBooks;
-            renderQueue();
-            loadBooks();
+
+            // Initial view selection.
+            if (REQUIRES_PASSWORD && !getToken()) {
+              showLogin();
+            } else {
+              showApp();
+              renderQueue();
+              loadBooks();
+            }
           </script>
         </body>
         </html>

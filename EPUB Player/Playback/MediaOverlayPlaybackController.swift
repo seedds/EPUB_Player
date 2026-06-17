@@ -51,6 +51,11 @@ final class MediaOverlayPlaybackController: ObservableObject {
     private var cachedNowPlayingArtwork: MPMediaItemArtwork?
     private var hasLoadedNowPlayingArtwork = false
 
+    /// Test-only override for audio URL resolution. When set, `resolvedAudioFileURL`
+    /// routes through this closure instead of materializing the asset from disk,
+    /// allowing tests to inject delays and reproduce stale-start races.
+    private var audioURLResolverOverride: ((String) async throws -> URL)?
+
     private var player: AVPlayer?
     private var loadedAudioPath: String?
     private var currentBookID: UUID?
@@ -303,7 +308,17 @@ final class MediaOverlayPlaybackController: ObservableObject {
             guard let self else { return }
 
             do {
-                let player = try await self.preparedPlayer(for: clip)
+                let audioURL = try await self.resolvedAudioFileURL(for: clip.audioPath)
+
+                // A stale preparation must not mutate player state. By the time
+                // the slow URL resolution above completes, the user may have
+                // navigated to a newer clip and started a newer transition.
+                // Validate the transition before touching self.player.
+                guard self.isCurrentClip(clip), self.currentTransitionID == transitionID else {
+                    return
+                }
+
+                let player = self.applyPreparedPlayer(audioURL: audioURL, for: clip)
                 player.pause()
                 player.seek(to: CMTime(seconds: clip.clipBegin, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, clip, player] _ in
                     guard let self else { return }
@@ -343,8 +358,11 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
     }
 
-    private func preparedPlayer(for clip: EPUBMediaOverlayClip) async throws -> AVPlayer {
-        let audioURL = try await resolvedAudioFileURL(for: clip.audioPath)
+    /// Applies a resolved audio URL to the player, reusing or creating the
+    /// `AVPlayer` as needed. Synchronous and `@MainActor`-isolated: callers
+    /// must validate the current transition before invoking this, since it
+    /// mutates `self.player`, `loadedAudioPath`, and the time observers.
+    private func applyPreparedPlayer(audioURL: URL, for clip: EPUBMediaOverlayClip) -> AVPlayer {
         if let player,
            loadedAudioPath == clip.audioPath,
            player.currentItem != nil {
@@ -370,6 +388,10 @@ final class MediaOverlayPlaybackController: ObservableObject {
     }
 
     private func resolvedAudioFileURL(for audioPath: String) async throws -> URL {
+        if let audioURLResolverOverride {
+            return try await audioURLResolverOverride(audioPath)
+        }
+
         guard let currentBookID, let currentEPUBURL else {
             throw BookAssetCacheError.missingArchiveEntry(audioPath)
         }
@@ -954,3 +976,21 @@ private struct ClipTimelineEntry {
     let start: Double
     let end: Double
 }
+
+#if DEBUG
+extension MediaOverlayPlaybackController {
+    /// Injects clips and a custom audio URL resolver for testing, bypassing the
+    /// disk-backed asset materialization and EPUB loading path.
+    func configureForTesting(
+        clips: [EPUBMediaOverlayClip],
+        audioURLResolver: @escaping (String) async throws -> URL
+    ) {
+        self.clips = clips
+        self.audioURLResolverOverride = audioURLResolver
+        self.currentClipIndex = nil
+        self.state = clips.isEmpty ? .unavailable : .ready
+    }
+
+    var test_loadedAudioPath: String? { loadedAudioPath }
+}
+#endif

@@ -253,6 +253,46 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: backups[0]), Data("not json".utf8))
     }
 
+    func testUploadServerPasswordDefaultsToOff() {
+        XCTAssertFalse(store.uploadServerRequiresPassword)
+        XCTAssertEqual(store.uploadServerPassword, "")
+    }
+
+    func testUploadServerPasswordPersistsAcrossStoreInstances() async throws {
+        store.uploadServerRequiresPassword = true
+        store.uploadServerPassword = "mysecret"
+        store.persistNow()
+
+        let reloadedStore = AppStateStore()
+        XCTAssertTrue(reloadedStore.uploadServerRequiresPassword)
+        XCTAssertEqual(reloadedStore.uploadServerPassword, "mysecret")
+    }
+
+    func testUploadServerPasswordDefaultsWhenMissingFromPersistedState() async throws {
+        // Simulate a state file written before the password fields were added.
+        let stateJSON = """
+        {
+            "books": [],
+            "customFontFamilies": [],
+            "fontSize": 1.2,
+            "lineHeight": 1.2,
+            "fontFamilyRawValue": "Literata",
+            "themeRawValue": "system",
+            "readAloudColorRawValue": "#34C759",
+            "readingBackgroundRawValue": "white",
+            "playbackSpeed": 1.0,
+            "playbackJumpInterval": 15.0,
+            "uploadServerPort": 8080,
+            "booksSortOptionRawValue": "recentlyAdded"
+        }
+        """
+        try Data(stateJSON.utf8).write(to: AppStorage.stateURL())
+
+        let reloadedStore = AppStateStore()
+        XCTAssertFalse(reloadedStore.uploadServerRequiresPassword, "missing key should default to false")
+        XCTAssertEqual(reloadedStore.uploadServerPassword, "", "missing key should default to empty string")
+    }
+
     private func makeBook(title: String, author: String, importedAt: TimeInterval) -> Book {
         let filename = "\(title)-\(author).epub"
         return Book(

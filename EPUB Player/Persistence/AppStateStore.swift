@@ -62,6 +62,8 @@ private struct PersistedAppState: Codable {
     var playbackJumpInterval: Double
     var autoRewindAfterBackgroundMinutes: Int?
     var uploadServerPort: Int
+    var uploadServerRequiresPassword: Bool
+    var uploadServerPassword: String
     var booksSortOptionRawValue: String
 
     private enum CodingKeys: String, CodingKey {
@@ -77,6 +79,8 @@ private struct PersistedAppState: Codable {
         case playbackJumpInterval
         case autoRewindAfterBackgroundMinutes
         case uploadServerPort
+        case uploadServerRequiresPassword
+        case uploadServerPassword
         case booksSortOptionRawValue
     }
 
@@ -102,6 +106,8 @@ private struct PersistedAppState: Codable {
         playbackJumpInterval = container.decodeValue(Double.self, forKey: .playbackJumpInterval, default: defaults.playbackJumpInterval)
         autoRewindAfterBackgroundMinutes = (try? container.decodeIfPresent(Int.self, forKey: .autoRewindAfterBackgroundMinutes)) ?? nil
         uploadServerPort = container.decodeValue(Int.self, forKey: .uploadServerPort, default: defaults.uploadServerPort)
+        uploadServerRequiresPassword = container.decodeValue(Bool.self, forKey: .uploadServerRequiresPassword, default: defaults.uploadServerRequiresPassword)
+        uploadServerPassword = container.decodeValue(String.self, forKey: .uploadServerPassword, default: defaults.uploadServerPassword)
         booksSortOptionRawValue = container.decodeValue(String.self, forKey: .booksSortOptionRawValue, default: defaults.booksSortOptionRawValue)
     }
 
@@ -118,6 +124,8 @@ private struct PersistedAppState: Codable {
         playbackJumpInterval: Double,
         autoRewindAfterBackgroundMinutes: Int?,
         uploadServerPort: Int,
+        uploadServerRequiresPassword: Bool,
+        uploadServerPassword: String,
         booksSortOptionRawValue: String
     ) {
         self.books = books
@@ -132,6 +140,8 @@ private struct PersistedAppState: Codable {
         self.playbackJumpInterval = playbackJumpInterval
         self.autoRewindAfterBackgroundMinutes = autoRewindAfterBackgroundMinutes
         self.uploadServerPort = uploadServerPort
+        self.uploadServerRequiresPassword = uploadServerRequiresPassword
+        self.uploadServerPassword = uploadServerPassword
         self.booksSortOptionRawValue = booksSortOptionRawValue
     }
 
@@ -148,6 +158,8 @@ private struct PersistedAppState: Codable {
         playbackJumpInterval: ReaderSettings.defaultPlaybackJumpInterval,
         autoRewindAfterBackgroundMinutes: ReaderSettings.defaultAutoRewindAfterBackgroundMinutes,
         uploadServerPort: ReaderSettings.defaultUploadServerPort,
+        uploadServerRequiresPassword: false,
+        uploadServerPassword: "",
         booksSortOptionRawValue: BooksSortOption.recentlyAdded.rawValue
     )
 }
@@ -172,6 +184,8 @@ final class AppStateStore: ObservableObject {
     @Published var playbackJumpInterval = ReaderSettings.defaultPlaybackJumpInterval { didSet { scheduleSave() } }
     @Published var autoRewindAfterBackgroundMinutes = ReaderSettings.defaultAutoRewindAfterBackgroundMinutes { didSet { scheduleSave() } }
     @Published var uploadServerPort = ReaderSettings.defaultUploadServerPort { didSet { scheduleSave() } }
+    @Published var uploadServerRequiresPassword = false { didSet { scheduleSave() } }
+    @Published var uploadServerPassword = "" { didSet { scheduleSave() } }
     @Published var booksSortOption = BooksSortOption.recentlyAdded { didSet { scheduleSave() } }
 
     private var bookSubscriptions: [UUID: AnyCancellable] = [:]
@@ -323,6 +337,8 @@ final class AppStateStore: ObservableObject {
             persistedState.autoRewindAfterBackgroundMinutes ?? ReaderSettings.defaultAutoRewindAfterBackgroundMinutes
         )
         uploadServerPort = persistedState.uploadServerPort
+        uploadServerRequiresPassword = persistedState.uploadServerRequiresPassword
+        uploadServerPassword = persistedState.uploadServerPassword
         booksSortOption = BooksSortOption(rawValue: persistedState.booksSortOptionRawValue) ?? .recentlyAdded
     }
 
@@ -445,6 +461,8 @@ final class AppStateStore: ObservableObject {
                 autoRewindAfterBackgroundMinutes
             ),
             uploadServerPort: uploadServerPort,
+            uploadServerRequiresPassword: uploadServerRequiresPassword,
+            uploadServerPassword: uploadServerPassword,
             booksSortOptionRawValue: booksSortOption.rawValue
         )
     }
