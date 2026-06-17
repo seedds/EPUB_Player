@@ -467,6 +467,12 @@ struct ReaderView: View {
             }
             return "Read-aloud is unavailable for this book. Return to Books and tap Refresh to retry."
         case .ready:
+            // The book is marked ready, but the playback controller is the source
+            // of truth for the cached manifest. A corrupt or stale cache surfaces
+            // here as a load failure even though preparation state says ready.
+            if case .failed = playback.state {
+                return "Read-aloud is unavailable for this book. Return to Books and tap Refresh to retry."
+            }
             return nil
         }
     }
