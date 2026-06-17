@@ -631,10 +631,10 @@ enum BookImportService {
         progressHandler: (@MainActor @Sendable (RefreshProgress) -> Void)?
     ) async throws -> [URL] {
         do {
-            let scannedEPUBURLs = try scannedLibraryEPUBURLs(fileManager: fileManager)
-            if !scannedEPUBURLs.isEmpty || existingBooks.isEmpty {
-                return scannedEPUBURLs
-            }
+            // A successful scan is authoritative, even when empty: an empty
+            // result lets the refresh remove stale records for files that are
+            // genuinely gone instead of leaving ghost books behind.
+            return try scannedLibraryEPUBURLs(fileManager: fileManager)
         } catch {
             guard !existingBooks.isEmpty else {
                 throw error
