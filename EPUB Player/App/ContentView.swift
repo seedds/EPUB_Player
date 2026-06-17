@@ -565,6 +565,7 @@ private struct UploadView: View {
     @EnvironmentObject private var store: AppStateStore
     @ObservedObject var controller: UploadServerController
     @FocusState private var isPortFieldFocused: Bool
+    @FocusState private var isPasswordFieldFocused: Bool
     @State private var portText = ""
 
     var body: some View {
@@ -586,6 +587,23 @@ private struct UploadView: View {
                             .disabled(controller.status == .running)
                     }
 
+                    Toggle("Require Password", isOn: $store.uploadServerRequiresPassword)
+                        .disabled(controller.status == .running)
+
+                    if store.uploadServerRequiresPassword {
+                        HStack {
+                            Text("Password")
+
+                            Spacer()
+
+                            TextField("Password", text: $store.uploadServerPassword)
+                                .multilineTextAlignment(.trailing)
+                                .focused($isPasswordFieldFocused)
+                                .disabled(controller.status == .running)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                        }
+                    }
 
                     if let serverURL = controller.serverURL {
                         VStack(alignment: .leading, spacing: 8) {
@@ -600,6 +618,7 @@ private struct UploadView: View {
                     }
 
                     Button {
+                        isPasswordFieldFocused = false
                         commitPortText()
                         switch controller.status {
                         case .running:
@@ -611,6 +630,7 @@ private struct UploadView: View {
                     } label: {
                         Text(controller.status == .running ? "Stop Server" : "Start Server")
                     }
+
                 }
 
                 if case .failed(let message) = controller.status {
@@ -695,6 +715,11 @@ private struct UploadView: View {
             }
             .onChange(of: store.uploadServerPort) { _, _ in
                 syncPortText()
+            }
+            .onChange(of: isPasswordFieldFocused) { _, isFocused in
+                if !isFocused {
+                    store.uploadServerPassword = store.uploadServerPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
             }
         }
     }

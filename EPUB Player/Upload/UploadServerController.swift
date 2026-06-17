@@ -140,7 +140,10 @@ final class UploadServerController: ObservableObject {
     func start(store: AppStateStore) {
         guard server == nil else { return }
 
-        let server = LocalUploadServer(port: port)
+        let authConfig: UploadServerAuthConfig = store.uploadServerRequiresPassword && !store.uploadServerPassword.isEmpty
+            ? .makeProtected(password: store.uploadServerPassword)
+            : .open
+        let server = LocalUploadServer(port: port, authConfig: authConfig)
         server.onUploadStarted = { [weak self] snapshot in
             Task { @MainActor in
                 self?.upsertActiveUpload(from: snapshot, phase: .uploading)
