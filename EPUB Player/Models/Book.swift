@@ -70,6 +70,58 @@ struct Bookmark: Identifiable, Codable, Hashable {
     }
 }
 
+struct HistoryEntry: Identifiable, Codable, Hashable {
+    let id: UUID
+    var reason: String?
+    var chapterTitle: String?
+    var locatorJSON: String?
+    var resourceHref: String?
+    var chapterProgress: Double?
+    var totalProgress: Double?
+    var clipText: String?
+    var textResourceHref: String?
+    var fragmentID: String?
+    var clipBegin: Double?
+    var clipEnd: Double?
+    var clipNumberInChapter: Int?
+    var clipCountInChapter: Int?
+    var createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        reason: String? = nil,
+        chapterTitle: String? = nil,
+        locatorJSON: String? = nil,
+        resourceHref: String? = nil,
+        chapterProgress: Double? = nil,
+        totalProgress: Double? = nil,
+        clipText: String? = nil,
+        textResourceHref: String? = nil,
+        fragmentID: String? = nil,
+        clipBegin: Double? = nil,
+        clipEnd: Double? = nil,
+        clipNumberInChapter: Int? = nil,
+        clipCountInChapter: Int? = nil,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.reason = reason
+        self.chapterTitle = chapterTitle
+        self.locatorJSON = locatorJSON
+        self.resourceHref = resourceHref
+        self.chapterProgress = chapterProgress
+        self.totalProgress = totalProgress
+        self.clipText = clipText
+        self.textResourceHref = textResourceHref
+        self.fragmentID = fragmentID
+        self.clipBegin = clipBegin
+        self.clipEnd = clipEnd
+        self.clipNumberInChapter = clipNumberInChapter
+        self.clipCountInChapter = clipCountInChapter
+        self.createdAt = createdAt
+    }
+}
+
 final class Book: ObservableObject, Identifiable, Codable, Hashable {
     let id: UUID
     @Published var title: String
@@ -81,6 +133,7 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
     @Published var metadataIdentifier: String?
     @Published var lastLocatorJSON: String?
     @Published var bookmarks: [Bookmark]
+    @Published var history: [HistoryEntry]
     @Published var lastPlayedTextResourceHref: String?
     @Published var lastPlayedFragmentID: String?
     @Published var lastPlayedClipBegin: Double?
@@ -107,6 +160,7 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
         metadataIdentifier: String? = nil,
         lastLocatorJSON: String? = nil,
         bookmarks: [Bookmark] = [],
+        history: [HistoryEntry] = [],
         lastPlayedTextResourceHref: String? = nil,
         lastPlayedFragmentID: String? = nil,
         lastPlayedClipBegin: Double? = nil,
@@ -132,6 +186,7 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
         self.metadataIdentifier = metadataIdentifier
         self.lastLocatorJSON = lastLocatorJSON
         self.bookmarks = bookmarks
+        self.history = history
         self.lastPlayedTextResourceHref = lastPlayedTextResourceHref
         self.lastPlayedFragmentID = lastPlayedFragmentID
         self.lastPlayedClipBegin = lastPlayedClipBegin
@@ -159,6 +214,7 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
         case metadataIdentifier
         case lastLocatorJSON
         case bookmarks
+        case history
         case lastPlayedTextResourceHref
         case lastPlayedFragmentID
         case lastPlayedClipBegin
@@ -187,6 +243,7 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
         metadataIdentifier = try container.decodeIfPresent(String.self, forKey: .metadataIdentifier)
         lastLocatorJSON = try container.decodeIfPresent(String.self, forKey: .lastLocatorJSON)
         bookmarks = try container.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
+        history = try container.decodeIfPresent([HistoryEntry].self, forKey: .history) ?? []
         lastPlayedTextResourceHref = try container.decodeIfPresent(String.self, forKey: .lastPlayedTextResourceHref)
         lastPlayedFragmentID = try container.decodeIfPresent(String.self, forKey: .lastPlayedFragmentID)
         lastPlayedClipBegin = try container.decodeIfPresent(Double.self, forKey: .lastPlayedClipBegin)
@@ -215,6 +272,7 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
         try container.encodeIfPresent(metadataIdentifier, forKey: .metadataIdentifier)
         try container.encodeIfPresent(lastLocatorJSON, forKey: .lastLocatorJSON)
         try container.encode(bookmarks, forKey: .bookmarks)
+        try container.encode(history, forKey: .history)
         try container.encodeIfPresent(lastPlayedTextResourceHref, forKey: .lastPlayedTextResourceHref)
         try container.encodeIfPresent(lastPlayedFragmentID, forKey: .lastPlayedFragmentID)
         try container.encodeIfPresent(lastPlayedClipBegin, forKey: .lastPlayedClipBegin)

@@ -89,6 +89,7 @@ struct ReaderView: View {
                 items: chapterItems,
                 selectedItemID: activeChapterItemID,
                 bookmarks: book.bookmarks.sorted { $0.createdAt > $1.createdAt },
+                history: book.history.sorted { $0.createdAt > $1.createdAt },
                 onSelectChapter: { item in
                     guard case .ready(_, let navigator) = state else {
                         return
@@ -109,6 +110,19 @@ struct ReaderView: View {
                 },
                 onDeleteBookmarks: { ids in
                     book.bookmarks.removeAll { ids.contains($0.id) }
+                },
+                onSelectHistory: { entry in
+                    guard case .ready(_, let navigator) = state else {
+                        return
+                    }
+                    isChapterListPresented = false
+                    Task {
+                        await goToHistoryEntry(entry, navigator: navigator)
+                    }
+                },
+                onDeleteHistory: { ids in
+                    book.history.removeAll { ids.contains($0.id) }
+                    store.persistNow()
                 }
             )
         }
@@ -313,6 +327,7 @@ struct ReaderView: View {
             .onChange(of: playback.state) { oldValue, newValue in
                 if oldValue.isPlaying && !newValue.isPlaying {
                     lastHandledPlaybackStartClipKey = nil
+                    recordHistory(reason: .paused)
                     return
                 }
 
@@ -320,6 +335,7 @@ struct ReaderView: View {
                     return
                 }
 
+                recordHistory(reason: .played)
                 Task {
                     await handleClipPlaybackStartIfNeeded(with: navigator)
                 }
@@ -795,12 +811,54 @@ struct ReaderView: View {
             return
         }
 
+        let snapshot = currentPositionSnapshot(for: locator)
+        Task { @MainActor in
+            let clipText = await readCurrentClipText(with: navigator)
+            book.bookmarks.append(
+                Bookmark(
+                    chapterTitle: snapshot.chapterTitle,
+                    locatorJSON: snapshot.locatorJSON,
+                    resourceHref: snapshot.resourceHref,
+                    chapterProgress: snapshot.chapterProgress,
+                    totalProgress: snapshot.totalProgress,
+                    clipText: clipText,
+                    textResourceHref: snapshot.textResourceHref,
+                    fragmentID: snapshot.fragmentID,
+                    clipBegin: snapshot.clipBegin,
+                    clipEnd: snapshot.clipEnd,
+                    clipNumberInChapter: snapshot.clipNumberInChapter,
+                    clipCountInChapter: snapshot.clipCountInChapter
+                )
+            )
+            store.persistNow()
+        }
+    }
+
+    /// Snapshot of the current reading position shared by bookmark and history
+    /// recording. Captures the locator and, when a clip is active, its identity
+    /// and per-resource ordinal. `clipText` is filled separately because reading
+    /// it from the page is asynchronous.
+    private struct PositionSnapshot {
+        var chapterTitle: String?
+        var locatorJSON: String?
+        var resourceHref: String?
+        var chapterProgress: Double?
+        var totalProgress: Double?
+        var textResourceHref: String?
+        var fragmentID: String?
+        var clipBegin: Double?
+        var clipEnd: Double?
+        var clipNumberInChapter: Int?
+        var clipCountInChapter: Int?
+    }
+
+    private func currentPositionSnapshot(for locator: Locator) -> PositionSnapshot {
         let reference = normalizedReference(for: locator.href.string)
         let chapterTitle = chapterItems.last { item in
             normalizedResourceHref(for: item.link.href) == reference.resourceHref
         }?.title
 
-        var bookmark = Bookmark(
+        var snapshot = PositionSnapshot(
             chapterTitle: chapterTitle,
             locatorJSON: locator.jsonString,
             resourceHref: reference.resourceHref,
@@ -811,27 +869,75 @@ struct ReaderView: View {
         if let clipIndex = playback.currentClipIndex,
            playback.clips.indices.contains(clipIndex) {
             let clip = playback.clips[clipIndex]
-            bookmark.textResourceHref = clip.textResourceHref
-            bookmark.fragmentID = clip.fragmentID
-            bookmark.clipBegin = clip.clipBegin
-            bookmark.clipEnd = clip.clipEnd
+            snapshot.textResourceHref = clip.textResourceHref
+            snapshot.fragmentID = clip.fragmentID
+            snapshot.clipBegin = clip.clipBegin
+            snapshot.clipEnd = clip.clipEnd
 
             let clipResourceHref = normalizedResourceHref(for: clip.textResourceHref)
             let chapterClipIndices = playback.clips.indices.filter { index in
                 normalizedResourceHref(for: playback.clips[index].textResourceHref) == clipResourceHref
             }
-            bookmark.clipCountInChapter = chapterClipIndices.count
-            bookmark.clipNumberInChapter = chapterClipIndices.firstIndex(of: clipIndex).map { $0 + 1 }
+            snapshot.clipCountInChapter = chapterClipIndices.count
+            snapshot.clipNumberInChapter = chapterClipIndices.firstIndex(of: clipIndex).map { $0 + 1 }
         }
 
-        let bookmarkToAppend = bookmark
+        return snapshot
+    }
+
+    private static let historyEntryLimit = 30
+
+    @MainActor
+    private func recordHistory(reason: HistoryEventReason) {
+        guard case .ready(_, let navigator) = state,
+              let locator = navigator.currentLocation
+        else {
+            return
+        }
+
+        let snapshot = currentPositionSnapshot(for: locator)
         Task { @MainActor in
             let clipText = await readCurrentClipText(with: navigator)
-            var stored = bookmarkToAppend
-            stored.clipText = clipText
-            book.bookmarks.append(stored)
+            let entry = HistoryEntry(
+                reason: reason.label,
+                chapterTitle: snapshot.chapterTitle,
+                locatorJSON: snapshot.locatorJSON,
+                resourceHref: snapshot.resourceHref,
+                chapterProgress: snapshot.chapterProgress,
+                totalProgress: snapshot.totalProgress,
+                clipText: clipText,
+                textResourceHref: snapshot.textResourceHref,
+                fragmentID: snapshot.fragmentID,
+                clipBegin: snapshot.clipBegin,
+                clipEnd: snapshot.clipEnd,
+                clipNumberInChapter: snapshot.clipNumberInChapter,
+                clipCountInChapter: snapshot.clipCountInChapter
+            )
+
+            // Collapse a consecutive record at the same position into the newest
+            // entry instead of stacking duplicates.
+            if let newest = book.history.first, isSameHistoryPosition(newest, entry) {
+                book.history.removeFirst()
+            }
+
+            book.history.insert(entry, at: 0)
+            if book.history.count > Self.historyEntryLimit {
+                book.history.removeLast(book.history.count - Self.historyEntryLimit)
+            }
             store.persistNow()
         }
+    }
+
+    private func isSameHistoryPosition(_ lhs: HistoryEntry, _ rhs: HistoryEntry) -> Bool {
+        if lhs.textResourceHref != nil || rhs.textResourceHref != nil {
+            return lhs.textResourceHref == rhs.textResourceHref &&
+                lhs.fragmentID == rhs.fragmentID &&
+                lhs.clipBegin == rhs.clipBegin &&
+                lhs.clipEnd == rhs.clipEnd
+        }
+
+        return lhs.resourceHref == rhs.resourceHref &&
+            abs((lhs.chapterProgress ?? 0) - (rhs.chapterProgress ?? 0)) <= 0.01
     }
 
     @MainActor
@@ -866,19 +972,57 @@ struct ReaderView: View {
 
     @MainActor
     private func goToBookmark(_ bookmark: Bookmark, navigator: EPUBNavigatorViewController) async {
-        if let clipIndex = bookmarkClipIndex(for: bookmark) {
+        await navigateToSavedPosition(
+            textResourceHref: bookmark.textResourceHref,
+            fragmentID: bookmark.fragmentID,
+            clipBegin: bookmark.clipBegin,
+            clipEnd: bookmark.clipEnd,
+            locatorJSON: bookmark.locatorJSON,
+            navigator: navigator
+        )
+        recordHistory(reason: .jumped)
+    }
+
+    @MainActor
+    private func goToHistoryEntry(_ entry: HistoryEntry, navigator: EPUBNavigatorViewController) async {
+        await navigateToSavedPosition(
+            textResourceHref: entry.textResourceHref,
+            fragmentID: entry.fragmentID,
+            clipBegin: entry.clipBegin,
+            clipEnd: entry.clipEnd,
+            locatorJSON: entry.locatorJSON,
+            navigator: navigator
+        )
+        recordHistory(reason: .jumped)
+    }
+
+    @MainActor
+    private func navigateToSavedPosition(
+        textResourceHref: String?,
+        fragmentID: String?,
+        clipBegin: Double?,
+        clipEnd: Double?,
+        locatorJSON: String?,
+        navigator: EPUBNavigatorViewController
+    ) async {
+        if let clipIndex = savedPositionClipIndex(
+            textResourceHref: textResourceHref,
+            fragmentID: fragmentID,
+            clipBegin: clipBegin,
+            clipEnd: clipEnd
+        ) {
             let wasPlaying = playback.state.isPlaying
             let clip = playback.clips[clipIndex]
             pendingChapterEntryPlaybackStartClipKey = playbackStartClipKey(for: clip)
             if let locator = playbackLocator(for: clip) {
                 _ = await navigator.go(to: locator, options: .animated)
             }
-            playback.selectClip(at: clipIndex, autoplay: wasPlaying, reason: "bookmarkSelect")
+            playback.selectClip(at: clipIndex, autoplay: wasPlaying, reason: "savedPositionSelect")
             applyCurrentClipDecoration(with: navigator)
             return
         }
 
-        guard let locatorJSON = bookmark.locatorJSON,
+        guard let locatorJSON,
               let locator = (try? Locator(jsonString: locatorJSON)) ?? nil
         else {
             return
@@ -886,24 +1030,29 @@ struct ReaderView: View {
         _ = await navigator.go(to: locator, options: .animated)
     }
 
-    private func bookmarkClipIndex(for bookmark: Bookmark) -> Int? {
-        guard let textResourceHref = bookmark.textResourceHref else {
+    private func savedPositionClipIndex(
+        textResourceHref: String?,
+        fragmentID: String?,
+        clipBegin: Double?,
+        clipEnd: Double?
+    ) -> Int? {
+        guard let textResourceHref else {
             return nil
         }
 
         let resourceHref = normalizedResourceHref(for: textResourceHref)
         if let exactMatch = playback.clips.firstIndex(where: { clip in
             normalizedResourceHref(for: clip.textResourceHref) == resourceHref &&
-            clip.fragmentID == bookmark.fragmentID &&
-            clip.clipBegin == bookmark.clipBegin &&
-            clip.clipEnd == bookmark.clipEnd
+            clip.fragmentID == fragmentID &&
+            clip.clipBegin == clipBegin &&
+            clip.clipEnd == clipEnd
         }) {
             return exactMatch
         }
 
         return playback.clips.firstIndex(where: { clip in
             normalizedResourceHref(for: clip.textResourceHref) == resourceHref &&
-            clip.fragmentID == bookmark.fragmentID
+            clip.fragmentID == fragmentID
         })
     }
 
@@ -916,6 +1065,7 @@ struct ReaderView: View {
             _ = await navigator.go(to: item.link, options: .animated)
             playback.selectClip(at: clipIndex, autoplay: wasPlaying, reason: "chapterSelect")
             applyCurrentClipDecoration(with: navigator)
+            recordHistory(reason: .jumped)
             return
         }
 
@@ -926,10 +1076,12 @@ struct ReaderView: View {
         _ = await navigator.go(to: item.link, options: .animated)
 
         guard wasPlaying else {
+            recordHistory(reason: .jumped)
             return
         }
 
         await startPlaybackFromVisibleOrForwardPosition(with: navigator)
+        recordHistory(reason: .jumped)
     }
 
     @MainActor
@@ -1000,6 +1152,7 @@ struct ReaderView: View {
 
         playback.selectClip(at: clipIndex, autoplay: true, reason: "audioTap")
         applyCurrentClipDecoration(with: navigator)
+        recordHistory(reason: .jumped)
     }
 
     @MainActor
@@ -1827,15 +1980,36 @@ private struct EPUBReference: Equatable {
 private enum ChapterBookmarkTab: Hashable {
     case chapters
     case bookmarks
+    case history
+}
+
+private enum HistoryEventReason {
+    case played
+    case paused
+    case jumped
+
+    var label: String {
+        switch self {
+        case .played:
+            return "Played"
+        case .paused:
+            return "Paused"
+        case .jumped:
+            return "Jumped"
+        }
+    }
 }
 
 private struct ChapterAndBookmarkScreen: View {
     let items: [ChapterListItem]
     let selectedItemID: ChapterListItem.ID?
     let bookmarks: [Bookmark]
+    let history: [HistoryEntry]
     let onSelectChapter: (ChapterListItem) -> Void
     let onSelectBookmark: (Bookmark) -> Void
     let onDeleteBookmarks: (Set<Bookmark.ID>) -> Void
+    let onSelectHistory: (HistoryEntry) -> Void
+    let onDeleteHistory: (Set<HistoryEntry.ID>) -> Void
 
     @State private var selectedTab: ChapterBookmarkTab = .chapters
 
@@ -1844,6 +2018,7 @@ private struct ChapterAndBookmarkScreen: View {
             Picker("View", selection: $selectedTab) {
                 Text("Chapters").tag(ChapterBookmarkTab.chapters)
                 Text("Bookmarks").tag(ChapterBookmarkTab.bookmarks)
+                Text("History").tag(ChapterBookmarkTab.history)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
@@ -1861,6 +2036,12 @@ private struct ChapterAndBookmarkScreen: View {
                     bookmarks: bookmarks,
                     onSelect: onSelectBookmark,
                     onDelete: onDeleteBookmarks
+                )
+            case .history:
+                HistoryListScreen(
+                    history: history,
+                    onSelect: onSelectHistory,
+                    onDelete: onDeleteHistory
                 )
             }
         }
@@ -1990,6 +2171,89 @@ private struct BookmarkListScreen: View {
         }
 
         parts.append(bookmark.createdAt.formatted(date: .abbreviated, time: .shortened))
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct HistoryListScreen: View {
+    let history: [HistoryEntry]
+    let onSelect: (HistoryEntry) -> Void
+    let onDelete: (Set<HistoryEntry.ID>) -> Void
+
+    var body: some View {
+        Group {
+            if history.isEmpty {
+                ContentUnavailableView(
+                    "No History",
+                    systemImage: "clock",
+                    description: Text("Your reading positions are recorded automatically as you play, pause, and jump.")
+                )
+            } else {
+                List {
+                    ForEach(history) { entry in
+                        Button {
+                            onSelect(entry)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(primaryText(for: entry))
+                                    .foregroundStyle(Color.primary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                Text(secondaryText(for: entry))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .onDelete { offsets in
+                        let ids = Set(offsets.map { history[$0].id })
+                        onDelete(ids)
+                    }
+                }
+                .listStyle(.plain)
+            }
+        }
+    }
+
+    private func primaryText(for entry: HistoryEntry) -> String {
+        if let clipText = entry.clipText, !clipText.isEmpty {
+            return clipText
+        }
+        if let chapterTitle = entry.chapterTitle, !chapterTitle.isEmpty {
+            return chapterTitle
+        }
+        return "Reading position"
+    }
+
+    private func secondaryText(for entry: HistoryEntry) -> String {
+        var parts: [String] = []
+
+        if let reason = entry.reason, !reason.isEmpty {
+            parts.append(reason)
+        }
+
+        let hasClipText = (entry.clipText?.isEmpty == false)
+        if hasClipText,
+           let chapterTitle = entry.chapterTitle,
+           !chapterTitle.isEmpty {
+            parts.append(chapterTitle)
+        }
+
+        if let number = entry.clipNumberInChapter,
+           let total = entry.clipCountInChapter {
+            parts.append("Clip \(number)/\(total)")
+        }
+
+        if let progress = entry.chapterProgress {
+            parts.append("\(Int((progress * 100).rounded()))%")
+        }
+
+        parts.append(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
         return parts.joined(separator: " · ")
     }
 }
