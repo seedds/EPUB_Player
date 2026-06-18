@@ -133,6 +133,12 @@ struct ReaderView: View {
             persistLastPlayedClip(immediately: true)
             isPlaybackSpeedControlPresented = false
             isReaderSettingsControlPresented = false
+            // Don't tear down playback when disappearing because we pushed the
+            // chapters/bookmarks screen on top of the reader; only stop when the
+            // reader is actually being closed.
+            guard !isChapterListPresented else {
+                return
+            }
             lastHandledPlaybackStartClipKey = nil
             pendingDecorationClipKey = nil
             backgroundEnteredAt = nil
