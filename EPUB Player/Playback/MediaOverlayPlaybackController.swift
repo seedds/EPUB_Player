@@ -660,7 +660,15 @@ final class MediaOverlayPlaybackController: ObservableObject {
             }
         }
 
-        if clip.clipEnd == nil, let item = player.currentItem {
+        // Always observe end-of-item, even when the clip has an explicit
+        // `clipEnd`. The boundary time observer is not guaranteed to fire when
+        // its boundary sits at (or essentially at) the audio file's true end:
+        // the player reaches end-of-stream and pauses before crossing it. For
+        // the last clip in an audio file (e.g. a chapter boundary) that would
+        // otherwise leave playback stuck. This end observer is the fallback
+        // that still advances. If both fire, `nextClip` is idempotent thanks
+        // to the `currentTransitionID`/`isCurrentClip` guards.
+        if let item = player.currentItem {
             endObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: item,
@@ -992,5 +1000,10 @@ extension MediaOverlayPlaybackController {
     }
 
     var test_loadedAudioPath: String? { loadedAudioPath }
+
+    /// True when an end-of-item observer is registered. Used to verify that a
+    /// clip with an explicit `clipEnd` still gets the end-of-file fallback that
+    /// auto-advances across chapter boundaries.
+    var test_hasEndObserver: Bool { endObserver != nil }
 }
 #endif
