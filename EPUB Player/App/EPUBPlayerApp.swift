@@ -17,7 +17,7 @@ struct EPUBPlayerApp: App {
 
     init() {
         #if canImport(UIKit)
-        let font = UIFont.systemFont(ofSize: 13, weight: .regular)
+        let font = UIFont.systemFont(ofSize: 16, weight: .regular)
 
         UISegmentedControl.appearance().setTitleTextAttributes(
             [.font: font],
