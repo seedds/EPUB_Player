@@ -2027,6 +2027,7 @@ private struct ChapterAndBookmarkScreen: View {
                 Text("History").tag(ChapterBookmarkTab.history)
             }
             .pickerStyle(.segmented)
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .padding(.horizontal)
             .padding(.vertical, 8)
 

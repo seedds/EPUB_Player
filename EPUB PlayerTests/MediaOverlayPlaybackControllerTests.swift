@@ -20,6 +20,30 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
         )
     }
 
+    /// A clip with an explicit `clipEnd` (the normal SMIL case) must still get
+    /// an end-of-item observer registered. The boundary time observer is not
+    /// guaranteed to fire when its boundary sits at the audio file's true end,
+    /// which left auto-advance stuck at chapter boundaries. The end-of-item
+    /// observer is the fallback that keeps playback advancing.
+    func testClipWithClipEndStillRegistersEndOfItemObserver() async throws {
+        let controller = MediaOverlayPlaybackController()
+        let clip = makeClip(audioPath: "audio.mp3", fragmentID: "a")
+        let url = URL(fileURLWithPath: "/tmp/audio.mp3")
+
+        controller.configureForTesting(clips: [clip]) { _ in url }
+
+        controller.selectClip(at: 0, autoplay: true, reason: "test-end-observer")
+
+        try await waitUntil(timeout: 5) {
+            controller.test_hasEndObserver
+        }
+
+        XCTAssertTrue(
+            controller.test_hasEndObserver,
+            "Clip with a clipEnd must still register an end-of-item observer for chapter-boundary auto-advance"
+        )
+    }
+
     /// Reproduces the stale-async-start race: a slow preparation for an older
     /// clip must not clobber the player state of a newer clip that started after
     /// it. The older resolution is gated to complete only after the newer clip
