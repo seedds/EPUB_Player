@@ -214,6 +214,15 @@ struct ReaderView: View {
                 persistLastPlayedClip(immediately: true)
             }
         case .active:
+            // colorScheme changes are ignored while inactive (see the observer
+            // in readerSettingsObservers). Re-sync now that the scheme has
+            // settled so a system-appearance change made while backgrounded is
+            // applied, and any previously-corrupted background self-heals.
+            if case .ready(_, let navigator) = state,
+               ReaderSettings.appTheme(from: store.themeRawValue) == .system {
+                applyThemeBackground()
+                applyReaderPreferences(to: navigator)
+            }
             await handleAutoRewindIfNeeded()
         case .inactive:
             break
@@ -399,6 +408,12 @@ struct ReaderView: View {
                 playback.setJumpInterval(newValue)
             }
             .onChange(of: colorScheme) { _, _ in
+                // iOS reports transient colorScheme values during app-switcher
+                // snapshotting / scene transitions. Only react while the scene is
+                // active so a spurious flip can't persist a black background.
+                guard scenePhase == .active else {
+                    return
+                }
                 if ReaderSettings.appTheme(from: store.themeRawValue) == .system {
                     applyThemeBackground()
                     applyReaderPreferences(to: navigator)
