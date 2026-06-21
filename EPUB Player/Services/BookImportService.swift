@@ -56,6 +56,9 @@ enum BookImportService {
         let mediaOverlayPreparationState: MediaOverlayPreparationState
         let mediaOverlayPreparationError: String?
         let fingerprint: SourceFileFingerprint
+        /// Content-document hrefs from the new EPUB manifest, used to validate
+        /// saved positions on reimport.
+        let resourceHrefs: [String]
     }
 
     private struct StagedLibraryFile: Sendable {
@@ -348,13 +351,12 @@ enum BookImportService {
             existingBook.sourceFileModifiedAt = preparedImport.fingerprint.modifiedAt
             existingBook.importedAt = Date()
             // The file content changed (this branch only runs on a new
-            // fingerprint), so positions saved against the old content are
-            // invalid.
-            existingBook.lastLocatorJSON = nil
-            existingBook.lastPlayedTextResourceHref = nil
-            existingBook.lastPlayedFragmentID = nil
-            existingBook.lastPlayedClipBegin = nil
-            existingBook.lastPlayedClipEnd = nil
+            // fingerprint). Rather than discard every saved position, keep the
+            // ones that still resolve against the new content. Resource-href
+            // validation runs now (manifest hrefs are known); clip validation is
+            // deferred until the new media overlays finish preparing.
+            applyResourceHrefValidatedPositions(to: existingBook, resourceHrefs: preparedImport.resourceHrefs)
+            existingBook.pendingClipPositionRevalidation = bookHasClipPositions(existingBook)
             return existingBook
         }
 
@@ -378,6 +380,48 @@ enum BookImportService {
         )
         store.addBook(newBook)
         return newBook
+    }
+
+    @MainActor
+    private static func applyResourceHrefValidatedPositions(to book: Book, resourceHrefs: [String]) {
+        let positions = BookPositionValidator.Positions(
+            lastLocatorJSON: book.lastLocatorJSON,
+            lastPlayedTextResourceHref: book.lastPlayedTextResourceHref,
+            lastPlayedFragmentID: book.lastPlayedFragmentID,
+            lastPlayedClipBegin: book.lastPlayedClipBegin,
+            lastPlayedClipEnd: book.lastPlayedClipEnd,
+            bookmarks: book.bookmarks,
+            history: book.history
+        )
+        let validated = BookPositionValidator.validatedAgainstResourceHrefs(positions, resourceHrefs: resourceHrefs)
+        applyPositions(validated, to: book)
+    }
+
+    @MainActor
+    private static func applyPositions(_ positions: BookPositionValidator.Positions, to book: Book) {
+        book.lastLocatorJSON = positions.lastLocatorJSON
+        book.lastPlayedTextResourceHref = positions.lastPlayedTextResourceHref
+        book.lastPlayedFragmentID = positions.lastPlayedFragmentID
+        book.lastPlayedClipBegin = positions.lastPlayedClipBegin
+        book.lastPlayedClipEnd = positions.lastPlayedClipEnd
+        book.bookmarks = positions.bookmarks
+        book.history = positions.history
+    }
+
+    /// True when the book has any clip-based position (resume point, bookmark, or
+    /// history entry) that still needs validation against new media overlays.
+    @MainActor
+    private static func bookHasClipPositions(_ book: Book) -> Bool {
+        if book.lastPlayedTextResourceHref != nil, book.lastPlayedClipBegin != nil {
+            return true
+        }
+        if book.bookmarks.contains(where: { $0.textResourceHref != nil && $0.clipBegin != nil }) {
+            return true
+        }
+        if book.history.contains(where: { $0.textResourceHref != nil && $0.clipBegin != nil }) {
+            return true
+        }
+        return false
     }
 
     nonisolated private static func prepareImport(
@@ -476,8 +520,25 @@ enum BookImportService {
             mediaOverlayClipCount: nil,
             mediaOverlayPreparationState: .pending,
             mediaOverlayPreparationError: nil,
-            fingerprint: fingerprint
+            fingerprint: fingerprint,
+            resourceHrefs: contentResourceHrefs(from: package)
         )
+    }
+
+    /// Content-document hrefs (XHTML/HTML) from the parsed package manifest,
+    /// used to validate that saved positions still point at existing resources.
+    nonisolated private static func contentResourceHrefs(from package: EPUBPackageInfo?) -> [String] {
+        guard let package else {
+            return []
+        }
+        return package.manifestItems.compactMap { item in
+            let mediaType = item.mediaType?.lowercased()
+            let isContentDocument = mediaType == "application/xhtml+xml"
+                || mediaType == "text/html"
+                || item.href.lowercased().hasSuffix(".xhtml")
+                || item.href.lowercased().hasSuffix(".html")
+            return isContentDocument ? item.href : nil
+        }
     }
 
     nonisolated private static func stageSourceFileInLibrary(
@@ -971,6 +1032,11 @@ final class MediaOverlayPreparationCoordinator {
                 updatedBook.mediaOverlayClipCount = result?.manifest.clipCount
                 updatedBook.mediaOverlayPreparationState = .ready
                 updatedBook.mediaOverlayPreparationError = nil
+                if updatedBook.pendingClipPositionRevalidation {
+                    let clips = result?.manifest.documents.flatMap(\.clips) ?? []
+                    Self.revalidateClipPositions(for: updatedBook, against: clips)
+                    updatedBook.pendingClipPositionRevalidation = false
+                }
                 self?.publishProgress(
                     PreparationProgress(fractionCompleted: 1, message: "Read-aloud ready"),
                     for: bookID
@@ -987,6 +1053,12 @@ final class MediaOverlayPreparationCoordinator {
                 updatedBook.mediaOverlayClipCount = nil
                 updatedBook.mediaOverlayPreparationState = .failed
                 updatedBook.mediaOverlayPreparationError = error.localizedDescription
+                if updatedBook.pendingClipPositionRevalidation {
+                    // Preparation failed, so there are no clips to validate
+                    // against; drop the dangling clip-based positions.
+                    Self.revalidateClipPositions(for: updatedBook, against: [])
+                    updatedBook.pendingClipPositionRevalidation = false
+                }
                 self?.publishProgress(
                     PreparationProgress(fractionCompleted: 1, message: "Read-aloud unavailable"),
                     for: bookID
@@ -994,6 +1066,33 @@ final class MediaOverlayPreparationCoordinator {
                 store.persistNow()
             }
         }
+    }
+
+    /// Validates a book's clip-based positions against the freshly prepared clip
+    /// set, refreshing or pruning each. An empty clip list drops them all (used
+    /// when preparation failed or produced no clips).
+    @MainActor
+    private static func revalidateClipPositions(for book: Book, against clips: [EPUBMediaOverlayClip]) {
+        let positions = BookPositionValidator.Positions(
+            lastLocatorJSON: book.lastLocatorJSON,
+            lastPlayedTextResourceHref: book.lastPlayedTextResourceHref,
+            lastPlayedFragmentID: book.lastPlayedFragmentID,
+            lastPlayedClipBegin: book.lastPlayedClipBegin,
+            lastPlayedClipEnd: book.lastPlayedClipEnd,
+            bookmarks: book.bookmarks,
+            history: book.history
+        )
+        let validated = clips.isEmpty
+            ? BookPositionValidator.droppingClipPositions(positions)
+            : BookPositionValidator.validatedAgainstClips(positions, clips: clips)
+
+        book.lastLocatorJSON = validated.lastLocatorJSON
+        book.lastPlayedTextResourceHref = validated.lastPlayedTextResourceHref
+        book.lastPlayedFragmentID = validated.lastPlayedFragmentID
+        book.lastPlayedClipBegin = validated.lastPlayedClipBegin
+        book.lastPlayedClipEnd = validated.lastPlayedClipEnd
+        book.bookmarks = validated.bookmarks
+        book.history = validated.history
     }
 
     func cancelPreparation(for bookID: UUID) {

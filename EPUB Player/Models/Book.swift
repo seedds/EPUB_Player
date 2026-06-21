@@ -148,6 +148,9 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
     @Published var sourceFileModifiedAt: Date?
     @Published var importedAt: Date
     @Published var lastOpenedAt: Date?
+    /// Set when the file was re-imported and clip-based positions are awaiting
+    /// validation against the freshly prepared media overlay clips.
+    @Published var pendingClipPositionRevalidation: Bool
 
     init(
         id: UUID = UUID(),
@@ -174,7 +177,8 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
         sourceFileSize: Int64? = nil,
         sourceFileModifiedAt: Date? = nil,
         importedAt: Date = Date(),
-        lastOpenedAt: Date? = nil
+        lastOpenedAt: Date? = nil,
+        pendingClipPositionRevalidation: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -201,6 +205,7 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
         self.sourceFileModifiedAt = sourceFileModifiedAt
         self.importedAt = importedAt
         self.lastOpenedAt = lastOpenedAt
+        self.pendingClipPositionRevalidation = pendingClipPositionRevalidation
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -229,6 +234,7 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
         case sourceFileModifiedAt
         case importedAt
         case lastOpenedAt
+        case pendingClipPositionRevalidation
     }
 
     required init(from decoder: Decoder) throws {
@@ -258,6 +264,7 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
         sourceFileModifiedAt = try container.decodeIfPresent(Date.self, forKey: .sourceFileModifiedAt)
         importedAt = try container.decode(Date.self, forKey: .importedAt)
         lastOpenedAt = try container.decodeIfPresent(Date.self, forKey: .lastOpenedAt)
+        pendingClipPositionRevalidation = try container.decodeIfPresent(Bool.self, forKey: .pendingClipPositionRevalidation) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -287,6 +294,7 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
         try container.encodeIfPresent(sourceFileModifiedAt, forKey: .sourceFileModifiedAt)
         try container.encode(importedAt, forKey: .importedAt)
         try container.encodeIfPresent(lastOpenedAt, forKey: .lastOpenedAt)
+        try container.encode(pendingClipPositionRevalidation, forKey: .pendingClipPositionRevalidation)
     }
 
     static func == (lhs: Book, rhs: Book) -> Bool {

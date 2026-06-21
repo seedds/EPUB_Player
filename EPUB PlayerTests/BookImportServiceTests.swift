@@ -155,6 +155,52 @@ final class BookImportServiceTests: XCTestCase {
         XCTAssertEqual(store.books.count, 1)
     }
 
+    func testReimportPreservesResumePositionWhenResourceStillExists() async throws {
+        let firstURL = try makeEPUBFile(named: "keep.epub", title: "First Edition")
+        let firstImport = try await BookImportService.importBook(from: firstURL, filename: "keep.epub", store: store)
+        let original = try XCTUnwrap(firstImport)
+        // A resume position pointing at a resource that survives reimport.
+        original.lastLocatorJSON = #"{"href":"OEBPS/chapter1.xhtml","type":"application/xhtml+xml"}"#
+
+        let replacementURL = try makeEPUBFile(named: "keep2.epub", title: "Second Edition", extraEntry: "OEBPS/extra.txt")
+        let replaced = try await BookImportService.importBook(
+            from: replacementURL,
+            filename: "keep.epub",
+            store: store,
+            existingBookStrategy: .overwrite
+        )
+
+        let overwritten = try XCTUnwrap(replaced)
+        XCTAssertEqual(overwritten.id, original.id)
+        XCTAssertEqual(overwritten.title, "Second Edition")
+        XCTAssertNotNil(
+            overwritten.lastLocatorJSON,
+            "A resume position whose resource still exists must be preserved across reimport"
+        )
+    }
+
+    func testReimportDropsBookmarkForRemovedResourceAndKeepsSurviving() async throws {
+        let firstURL = try makeEPUBFile(named: "marks.epub", title: "First Edition")
+        let firstImport = try await BookImportService.importBook(from: firstURL, filename: "marks.epub", store: store)
+        let original = try XCTUnwrap(firstImport)
+        original.bookmarks = [
+            Bookmark(textResourceHref: "chapter1.xhtml", fragmentID: "p1"),
+            Bookmark(textResourceHref: "deleted.xhtml", fragmentID: "p2"),
+        ]
+
+        let replacementURL = try makeEPUBFile(named: "marks2.epub", title: "Second Edition", extraEntry: "OEBPS/extra.txt")
+        let replaced = try await BookImportService.importBook(
+            from: replacementURL,
+            filename: "marks.epub",
+            store: store,
+            existingBookStrategy: .overwrite
+        )
+
+        let overwritten = try XCTUnwrap(replaced)
+        XCTAssertEqual(overwritten.bookmarks.count, 1)
+        XCTAssertEqual(overwritten.bookmarks.first?.textResourceHref, "chapter1.xhtml")
+    }
+
     func testRefreshBooksFromDocuments() async throws {
         let booksDirectory = try AppStorage.booksDirectory()
 
