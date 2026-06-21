@@ -195,6 +195,9 @@ enum BookImportService {
         var overlayRetryIDs: Set<UUID> = []
         var skippedFilenames: [String] = []
         for (index, sourceURL) in epubURLs.enumerated() {
+            // Stop processing further files when the refresh is cancelled.
+            try Task.checkCancellation()
+
             let filename = AppStorage.sanitizedFilename(sourceURL.lastPathComponent)
             // One unreadable file must not abort the refresh of every other book.
             do {
@@ -213,7 +216,12 @@ enum BookImportService {
                         let coverTask = Task.detached(priority: .utility) {
                             try await regenerateCoverImage(from: sourceURL, bookID: existingBook.id)
                         }
-                        cachedCoverPath = try await coverTask.value
+                        // Task.detached doesn't inherit cancellation; forward it.
+                        cachedCoverPath = try await withTaskCancellationHandler {
+                            try await coverTask.value
+                        } onCancel: {
+                            coverTask.cancel()
+                        }
                     } else {
                         cachedCoverPath = nil
                     }
@@ -243,9 +251,15 @@ enum BookImportService {
 
                     book = existingBook
                 } else {
-                    let preparedImport = try await Task.detached(priority: .userInitiated) {
+                    let prepareTask = Task.detached(priority: .userInitiated) {
                         try await prepareRefreshImport(from: sourceURL, filename: filename, bookID: existingBook?.id ?? UUID())
-                    }.value
+                    }
+                    // Task.detached doesn't inherit cancellation; forward it.
+                    let preparedImport = try await withTaskCancellationHandler {
+                        try await prepareTask.value
+                    } onCancel: {
+                        prepareTask.cancel()
+                    }
 
                     book = upsertBook(from: preparedImport, existingBook: existingBook, store: store)
 
@@ -664,6 +678,10 @@ enum BookImportService {
         let books = store.books
         var didUpdateLibrary = false
         for book in books {
+            if Task.isCancelled {
+                break
+            }
+
             guard !BookAssetCacheService.hasCachedCover(for: book),
                   let sourceURL = try? book.resolvedEPUBFileURL(),
                   FileManager.default.fileExists(atPath: sourceURL.path)
@@ -673,9 +691,15 @@ enum BookImportService {
 
             let cachedCoverPath: String?
             do {
-                cachedCoverPath = try await Task.detached(priority: .utility) {
+                let coverTask = Task.detached(priority: .utility) {
                     try await regenerateCoverImage(from: sourceURL, bookID: book.id)
-                }.value
+                }
+                // Task.detached doesn't inherit cancellation; forward it.
+                cachedCoverPath = try await withTaskCancellationHandler {
+                    try await coverTask.value
+                } onCancel: {
+                    coverTask.cancel()
+                }
             } catch {
                 print("BookImportService: cover regeneration failed for \(book.originalFilename): \(error)")
                 cachedCoverPath = nil

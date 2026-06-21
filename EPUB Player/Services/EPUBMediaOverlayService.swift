@@ -225,6 +225,10 @@ enum EPUBMediaOverlayService {
         var documents: [EPUBMediaOverlayDocument] = []
         let candidateCount = max(candidates.count, 1)
         for (index, candidate) in candidates.enumerated() {
+            // Bail early on cancellation instead of parsing every remaining SMIL
+            // document (a cancelled preparation means the book was deleted).
+            try Task.checkCancellation()
+
             let progressFraction = 0.25 + (Double(index) / Double(candidateCount)) * 0.65
             reportProgress(
                 EPUBMediaOverlayProgress(
