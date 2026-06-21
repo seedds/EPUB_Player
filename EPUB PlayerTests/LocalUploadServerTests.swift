@@ -45,4 +45,24 @@ final class LocalUploadServerTests: XCTestCase {
         let b = UploadServerAuthConfig.makeProtected(password: "pw")
         XCTAssertFalse(b.isAuthorized(token: a.sessionToken), "token from another server instance must be rejected")
     }
+
+    // MARK: - UploadRequestLimits
+
+    func testHeaderBufferWithinLimitIsAccepted() {
+        XCTAssertFalse(UploadRequestLimits.isHeaderBufferTooLarge(byteCount: 0))
+        XCTAssertFalse(UploadRequestLimits.isHeaderBufferTooLarge(byteCount: UploadRequestLimits.maxHeaderBytes))
+    }
+
+    func testHeaderBufferOverLimitIsRejected() {
+        XCTAssertTrue(UploadRequestLimits.isHeaderBufferTooLarge(byteCount: UploadRequestLimits.maxHeaderBytes + 1))
+    }
+
+    func testBodyWithinLimitIsAccepted() {
+        XCTAssertFalse(UploadRequestLimits.isBodyTooLarge(contentLength: 0))
+        XCTAssertFalse(UploadRequestLimits.isBodyTooLarge(contentLength: UploadRequestLimits.maxBodyBytes))
+    }
+
+    func testBodyOverLimitIsRejected() {
+        XCTAssertTrue(UploadRequestLimits.isBodyTooLarge(contentLength: UploadRequestLimits.maxBodyBytes + 1))
+    }
 }

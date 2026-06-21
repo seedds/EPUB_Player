@@ -235,6 +235,12 @@ final class UploadServerController: ObservableObject {
     func stop() {
         server?.stop()
         server = nil
+        // Cancel any in-flight import and drop the queue so an import started
+        // by the server does not keep running and mutating state after stop.
+        // The current item bails cooperatively; partial files are reclaimed by
+        // the stale-partial sweep on the next start.
+        importTask?.cancel()
+        pendingImports = []
         activeUploads = []
         status = .stopped
     }
@@ -305,6 +311,10 @@ final class UploadServerController: ObservableObject {
         }
 
         while !pendingImports.isEmpty {
+            if Task.isCancelled {
+                break
+            }
+
             let pendingImport = pendingImports.removeFirst()
             isImportingBooks = true
             currentImportFilename = pendingImport.filename

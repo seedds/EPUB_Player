@@ -86,11 +86,13 @@ enum BookImportService {
             throw BookImportError.notEpub(filename)
         }
 
+        try Task.checkCancellation()
+
         let existingBook = existingBook(originalFilename: filename, store: store)
         let existingBookSnapshot = existingBook.map(snapshot(for:))
 
         let bookID = existingBook?.id ?? UUID()
-        let preparedImport = try await Task.detached(priority: .userInitiated) {
+        let prepareTask = Task.detached(priority: .userInitiated) {
             try await prepareImport(
                 from: sourceURL,
                 filename: filename,
@@ -99,11 +101,20 @@ enum BookImportService {
                 bookID: bookID,
                 progressHandler: progressHandler
             )
-        }.value
+        }
+        // Task.detached does not inherit cancellation; forward it so a cancelled
+        // import stops the long prepare work instead of running to completion.
+        let preparedImport = try await withTaskCancellationHandler {
+            try await prepareTask.value
+        } onCancel: {
+            prepareTask.cancel()
+        }
 
         guard let preparedImport else {
             return nil
         }
+
+        try Task.checkCancellation()
 
         await reportProgress(
             ImportProgress(fractionCompleted: 0.96, message: "Saving book..."),
