@@ -9,10 +9,14 @@ import Foundation
 
 enum AppStorage {
     nonisolated static func documentsDirectory() throws -> URL {
+        #if DEBUG
+        // Test-only override so the suite can redirect storage to a temp
+        // directory. Never compiled into release builds.
         if let overridePath = ProcessInfo.processInfo.environment["EPUBPLAYER_DOCUMENTS_DIRECTORY"],
            !overridePath.isEmpty {
             return try ensureDirectory(URL(fileURLWithPath: overridePath, isDirectory: true))
         }
+        #endif
 
         return try FileManager.default.url(
             for: .documentDirectory,
