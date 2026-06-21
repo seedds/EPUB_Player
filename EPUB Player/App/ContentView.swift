@@ -221,10 +221,16 @@ private struct BooksView: View {
             }
             let book = books[index]
             MediaOverlayPreparationCoordinator.shared.cancelPreparation(for: book.id)
-            if let epubURL = try? book.resolvedEPUBFileURL() {
-                try? fileManager.removeItem(at: epubURL)
+            // Remove the store record regardless of disk-cleanup success, but
+            // log failures so orphaned files are diagnosable.
+            do {
+                if let epubURL = try? book.resolvedEPUBFileURL() {
+                    try fileManager.removeItem(at: epubURL)
+                }
+                try BookAssetCacheService.removeAllCachedAssets(for: book.id)
+            } catch {
+                print("ContentView: failed to remove files for \(book.originalFilename): \(error)")
             }
-            try? BookAssetCacheService.removeAllCachedAssets(for: book.id)
             store.removeBook(id: book.id)
         }
 

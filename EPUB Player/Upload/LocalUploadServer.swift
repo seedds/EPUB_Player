@@ -25,6 +25,23 @@ enum LocalUploadServerError: LocalizedError {
     }
 }
 
+// Compares two strings without short-circuiting on the first mismatched byte,
+// so an attacker on the network cannot infer the secret from response timing.
+func constantTimeEquals(_ lhs: String, _ rhs: String) -> Bool {
+    let lhsBytes = Array(lhs.utf8)
+    let rhsBytes = Array(rhs.utf8)
+    // Length is not secret here; differing lengths can return early.
+    guard lhsBytes.count == rhsBytes.count else {
+        return false
+    }
+
+    var difference: UInt8 = 0
+    for index in lhsBytes.indices {
+        difference |= lhsBytes[index] ^ rhsBytes[index]
+    }
+    return difference == 0
+}
+
 // Immutable auth configuration passed to each connection.
 struct UploadServerAuthConfig {
     let requiresPassword: Bool
@@ -44,7 +61,7 @@ struct UploadServerAuthConfig {
     func isAuthorized(token: String?) -> Bool {
         guard requiresPassword else { return true }
         guard let token, !token.isEmpty else { return false }
-        return token == sessionToken
+        return constantTimeEquals(token, sessionToken)
     }
 }
 
@@ -438,7 +455,7 @@ private final class HTTPUploadConnection {
         }
 
         let provided = headers["x-epubplayer-password"] ?? ""
-        guard provided == authConfig.password else {
+        guard constantTimeEquals(provided, authConfig.password) else {
             finishWithHTTP(status: 401, body: "Incorrect password")
             return
         }

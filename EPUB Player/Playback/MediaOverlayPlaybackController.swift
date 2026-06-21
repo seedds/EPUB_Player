@@ -168,10 +168,22 @@ final class MediaOverlayPlaybackController: ObservableObject {
         cachedNowPlayingArtwork = nil
         hasLoadedNowPlayingArtwork = false
         currentBookID = book.id
-        currentEPUBURL = try? book.resolvedEPUBFileURL()
         currentBookTitle = book.title
         currentBookAuthor = book.author
-        currentBookCoverURL = try? book.resolvedCoverImageURL()
+        // Resolve URLs up front; log (rather than swallow) failures so a missing
+        // EPUB surfaces a real cause instead of only a generic playback error.
+        do {
+            currentEPUBURL = try book.resolvedEPUBFileURL()
+        } catch {
+            currentEPUBURL = nil
+            print("MediaOverlayPlaybackController: could not resolve EPUB URL for \(book.title): \(error)")
+        }
+        do {
+            currentBookCoverURL = try book.resolvedCoverImageURL()
+        } catch {
+            currentBookCoverURL = nil
+            print("MediaOverlayPlaybackController: could not resolve cover URL for \(book.title): \(error)")
+        }
 
         guard let jsonURL else {
             state = .unavailable

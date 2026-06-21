@@ -65,4 +65,19 @@ final class LocalUploadServerTests: XCTestCase {
     func testBodyOverLimitIsRejected() {
         XCTAssertTrue(UploadRequestLimits.isBodyTooLarge(contentLength: UploadRequestLimits.maxBodyBytes + 1))
     }
+
+    // MARK: - constantTimeEquals
+
+    func testConstantTimeEqualsMatchesIdenticalStrings() {
+        XCTAssertTrue(constantTimeEquals("", ""))
+        XCTAssertTrue(constantTimeEquals("secret", "secret"))
+        XCTAssertTrue(constantTimeEquals("üñïçødé", "üñïçødé"))
+    }
+
+    func testConstantTimeEqualsRejectsDifferentStrings() {
+        XCTAssertFalse(constantTimeEquals("secret", "Secret"))
+        XCTAssertFalse(constantTimeEquals("secret", "secret "))
+        XCTAssertFalse(constantTimeEquals("secret", "secre"))
+        XCTAssertFalse(constantTimeEquals("", "x"))
+    }
 }
