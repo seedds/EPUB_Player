@@ -56,6 +56,31 @@ final class BookImportServiceTests: XCTestCase {
         }
     }
 
+    func testImportHonorsCancellation() async throws {
+        let sourceURL = try makeEPUBFile(named: "cancel.epub", title: "Cancelled Book")
+        let store = self.store!
+
+        let task = Task { @MainActor in
+            try await BookImportService.importBook(
+                from: sourceURL,
+                filename: "cancel.epub",
+                store: store
+            )
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("A cancelled import should throw")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertTrue(store.books.isEmpty, "A cancelled import must not add a book")
+    }
+
     private func makeEPUBFile(named filename: String, title: String, extraEntry: String? = nil) throws -> URL {
         let opf = """
         <?xml version="1.0" encoding="UTF-8"?>

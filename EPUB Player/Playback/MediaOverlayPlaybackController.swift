@@ -67,6 +67,8 @@ final class MediaOverlayPlaybackController: ObservableObject {
     private var endObserver: NSObjectProtocol?
     private var periodicTimeObserver: Any?
     private var currentTransitionID: Int?
+    private var startTask: Task<Void, Never>?
+    private var updateNowPlayingTask: Task<Void, Never>?
     private var jumpAvailabilityRefreshTask: Task<Void, Never>?
     private var didConfigureRemoteCommands = false
     private var playCommandTarget: Any?
@@ -170,6 +172,10 @@ final class MediaOverlayPlaybackController: ObservableObject {
       }
 
     func stop(reason: String = "directStop") {
+        startTask?.cancel()
+        startTask = nil
+        updateNowPlayingTask?.cancel()
+        updateNowPlayingTask = nil
         player?.pause()
         removeObservers(reason: "stop[\(reason)]")
         if let player {
@@ -304,7 +310,10 @@ final class MediaOverlayPlaybackController: ObservableObject {
             return
         }
 
-        Task { @MainActor [weak self] in
+        // Cancel any prior in-flight start so a superseded transition stops its
+        // audio-resolution work instead of running to completion.
+        startTask?.cancel()
+        startTask = Task { @MainActor [weak self] in
             guard let self else { return }
 
             do {
@@ -314,7 +323,8 @@ final class MediaOverlayPlaybackController: ObservableObject {
                 // the slow URL resolution above completes, the user may have
                 // navigated to a newer clip and started a newer transition.
                 // Validate the transition before touching self.player.
-                guard self.isCurrentClip(clip), self.currentTransitionID == transitionID else {
+                guard !Task.isCancelled,
+                      self.isCurrentClip(clip), self.currentTransitionID == transitionID else {
                     return
                 }
 
@@ -770,10 +780,18 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
 
         let activePlaybackRate = playbackRateOverride ?? currentPlaybackRate()
-        Task { @MainActor [weak self] in
+        // Coalesce updates: the periodic observer fires every 0.5s, so cancel
+        // any prior in-flight snapshot task and replace it with the freshest one
+        // instead of letting them pile up.
+        updateNowPlayingTask?.cancel()
+        updateNowPlayingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             guard let snapshot = await self.nowPlayingSnapshot(for: clip, clipIndex: clipIndex, clipID: clipID) else {
                 self.clearNowPlayingInfo()
+                return
+            }
+
+            guard !Task.isCancelled else {
                 return
             }
 
@@ -939,6 +957,8 @@ final class MediaOverlayPlaybackController: ObservableObject {
 
     deinit {
         jumpAvailabilityRefreshTask?.cancel()
+        startTask?.cancel()
+        updateNowPlayingTask?.cancel()
         let player = player
         let boundaryObserver = boundaryObserver
         let endObserver = endObserver
@@ -1005,5 +1025,9 @@ extension MediaOverlayPlaybackController {
     /// clip with an explicit `clipEnd` still gets the end-of-file fallback that
     /// auto-advances across chapter boundaries.
     var test_hasEndObserver: Bool { endObserver != nil }
+
+    /// True when the most recent start transition's task has been cancelled.
+    /// Used to verify a superseded start stops its audio-resolution work.
+    var test_isStartTaskCancelled: Bool { startTask?.isCancelled ?? false }
 }
 #endif

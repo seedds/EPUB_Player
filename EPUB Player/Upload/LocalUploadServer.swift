@@ -205,6 +205,28 @@ final class LocalUploadServer {
     }
 }
 
+// Caps that protect the device from resource-exhaustion uploads. Kept as a
+// separate type so the pure size decisions can be unit-tested without a live
+// socket.
+enum UploadRequestLimits {
+    /// Caps the request header buffer so a client that never sends the
+    /// terminating blank line cannot grow it without bound.
+    static let maxHeaderBytes = 64 * 1024
+    /// Caps the declared upload body so a client cannot fill the device's disk.
+    static let maxBodyBytes: Int64 = 10 * 1024 * 1024 * 1024
+
+    /// True when an in-progress header buffer (still missing its terminating
+    /// blank line) has grown past the allowed maximum.
+    static func isHeaderBufferTooLarge(byteCount: Int) -> Bool {
+        byteCount > maxHeaderBytes
+    }
+
+    /// True when a declared `Content-Length` exceeds the allowed maximum.
+    static func isBodyTooLarge(contentLength: Int64) -> Bool {
+        contentLength > maxBodyBytes
+    }
+}
+
 // Single source of truth for which file types the upload pipeline accepts;
 // the server's 415 check and the controller's import routing must agree.
 enum UploadFileKind {
@@ -284,6 +306,11 @@ private final class HTTPUploadConnection {
                     let bodyStart = range.upperBound
                     let initialBody = headerData[bodyStart...]
                     handleRequest(headerData: Data(header), initialBody: Data(initialBody))
+                    return
+                }
+
+                if UploadRequestLimits.isHeaderBufferTooLarge(byteCount: headerData.count) {
+                    finishWithHTTP(status: 400, body: "Request header too large")
                     return
                 }
             }
@@ -373,6 +400,11 @@ private final class HTTPUploadConnection {
 
         guard let lengthText = headers["content-length"], let contentLength = Int64(lengthText), contentLength >= 0 else {
             finishWithHTTP(status: 411, body: "Content-Length is required")
+            return
+        }
+
+        guard !UploadRequestLimits.isBodyTooLarge(contentLength: contentLength) else {
+            finishWithHTTP(status: 413, body: "Upload exceeds the maximum allowed size")
             return
         }
 
@@ -675,6 +707,7 @@ private final class HTTPUploadConnection {
         case 404: "Not Found"
         case 405: "Method Not Allowed"
         case 411: "Length Required"
+        case 413: "Payload Too Large"
         case 415: "Unsupported Media Type"
         case 500: "Internal Server Error"
         default: "HTTP Response"

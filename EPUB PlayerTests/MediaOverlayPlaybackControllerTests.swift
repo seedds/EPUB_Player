@@ -97,6 +97,54 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
         XCTAssertEqual(controller.currentClipIndex, 1)
     }
 
+    /// A superseded start must cancel its in-flight audio-resolution task so the
+    /// older transition stops working instead of running to completion.
+    func testStartingNewerClipCancelsPriorStartTask() async throws {
+        let controller = MediaOverlayPlaybackController()
+
+        let clipA = makeClip(audioPath: "audioA.mp3", fragmentID: "a")
+        let clipB = makeClip(audioPath: "audioB.mp3", fragmentID: "b")
+
+        let releaseA = expectation(description: "release clip A resolution")
+        let aResolutionStarted = expectation(description: "clip A resolution started")
+
+        let urlA = URL(fileURLWithPath: "/tmp/audioA.mp3")
+        let urlB = URL(fileURLWithPath: "/tmp/audioB.mp3")
+
+        controller.configureForTesting(clips: [clipA, clipB]) { audioPath in
+            if audioPath == clipA.audioPath {
+                aResolutionStarted.fulfill()
+                await self.fulfillment(of: [releaseA], timeout: 5)
+                return urlA
+            }
+            return urlB
+        }
+
+        // Start clip A; it suspends inside the gated resolver.
+        controller.selectClip(at: 0, autoplay: true, reason: "test-A")
+        await fulfillment(of: [aResolutionStarted], timeout: 5)
+
+        // Start clip B while A is suspended — this should cancel A's start task.
+        controller.selectClip(at: 1, autoplay: true, reason: "test-B")
+        try await waitUntil(timeout: 5) {
+            controller.test_loadedAudioPath == clipB.audioPath
+        }
+
+        XCTAssertTrue(
+            controller.test_isStartTaskCancelled == false,
+            "The active (clip B) start task should not be cancelled"
+        )
+
+        releaseA.fulfill()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(
+            controller.test_loadedAudioPath,
+            clipB.audioPath,
+            "Superseded clip A start must not clobber clip B"
+        )
+    }
+
     private func waitUntil(
         timeout: TimeInterval,
         _ condition: @escaping () -> Bool
