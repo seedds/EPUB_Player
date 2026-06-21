@@ -11,6 +11,53 @@ import Foundation
 import MediaPlayer
 import UIKit
 
+/// Owns the AVPlayer-, time-observer-, and remote-command resources that must
+/// be released on the main thread. Kept as a separate reference type so the
+/// controller's `nonisolated deinit` can hand off cleanup by reading a single
+/// `let` holder instead of touching the controller's `@MainActor`-isolated
+/// stored properties directly (which is a data race under strict concurrency).
+private final class PlaybackResources: @unchecked Sendable {
+    var player: AVPlayer?
+    var boundaryObserver: Any?
+    var endObserver: NSObjectProtocol?
+    var periodicTimeObserver: Any?
+    var playCommandTarget: Any?
+    var pauseCommandTarget: Any?
+    var togglePlayPauseCommandTarget: Any?
+    var skipForwardCommandTarget: Any?
+    var skipBackwardCommandTarget: Any?
+
+    /// Removes all retained observers and remote-command targets. Must run on
+    /// the main thread.
+    func teardown() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+        if let playCommandTarget {
+            commandCenter.playCommand.removeTarget(playCommandTarget)
+        }
+        if let pauseCommandTarget {
+            commandCenter.pauseCommand.removeTarget(pauseCommandTarget)
+        }
+        if let togglePlayPauseCommandTarget {
+            commandCenter.togglePlayPauseCommand.removeTarget(togglePlayPauseCommandTarget)
+        }
+        if let skipForwardCommandTarget {
+            commandCenter.skipForwardCommand.removeTarget(skipForwardCommandTarget)
+        }
+        if let skipBackwardCommandTarget {
+            commandCenter.skipBackwardCommand.removeTarget(skipBackwardCommandTarget)
+        }
+        if let periodicTimeObserver, let player {
+            player.removeTimeObserver(periodicTimeObserver)
+        }
+        if let boundaryObserver, let player {
+            player.removeTimeObserver(boundaryObserver)
+        }
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+        }
+    }
+}
+
 @MainActor
 final class MediaOverlayPlaybackController: ObservableObject {
     private struct NowPlayingSnapshot {
@@ -39,7 +86,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
     @Published private(set) var canJumpBackward = false
     @Published private(set) var canJumpForward = false
 
-    private static var nextTransitionID: Int = 0
+    private var nextTransitionID = 0
     /// Maximum time gap (in seconds) between consecutive clips in the same audio file
     /// that allows seamless playback without reloading the player.
     /// Clips separated by less than this duration will continue playing from the current position.
@@ -56,26 +103,56 @@ final class MediaOverlayPlaybackController: ObservableObject {
     /// allowing tests to inject delays and reproduce stale-start races.
     private var audioURLResolverOverride: ((String) async throws -> URL)?
 
-    private var player: AVPlayer?
+    // Player, observers, and remote-command targets live in this holder so the
+    // nonisolated deinit can clean them up without reading isolated state.
+    private let resources = PlaybackResources()
+    private var player: AVPlayer? {
+        get { resources.player }
+        set { resources.player = newValue }
+    }
+    private var boundaryObserver: Any? {
+        get { resources.boundaryObserver }
+        set { resources.boundaryObserver = newValue }
+    }
+    private var endObserver: NSObjectProtocol? {
+        get { resources.endObserver }
+        set { resources.endObserver = newValue }
+    }
+    private var periodicTimeObserver: Any? {
+        get { resources.periodicTimeObserver }
+        set { resources.periodicTimeObserver = newValue }
+    }
+    private var playCommandTarget: Any? {
+        get { resources.playCommandTarget }
+        set { resources.playCommandTarget = newValue }
+    }
+    private var pauseCommandTarget: Any? {
+        get { resources.pauseCommandTarget }
+        set { resources.pauseCommandTarget = newValue }
+    }
+    private var togglePlayPauseCommandTarget: Any? {
+        get { resources.togglePlayPauseCommandTarget }
+        set { resources.togglePlayPauseCommandTarget = newValue }
+    }
+    private var skipForwardCommandTarget: Any? {
+        get { resources.skipForwardCommandTarget }
+        set { resources.skipForwardCommandTarget = newValue }
+    }
+    private var skipBackwardCommandTarget: Any? {
+        get { resources.skipBackwardCommandTarget }
+        set { resources.skipBackwardCommandTarget = newValue }
+    }
     private var loadedAudioPath: String?
     private var currentBookID: UUID?
     private var currentEPUBURL: URL?
     private var currentBookTitle: String?
     private var currentBookAuthor: String?
     private var currentBookCoverURL: URL?
-    private var boundaryObserver: Any?
-    private var endObserver: NSObjectProtocol?
-    private var periodicTimeObserver: Any?
     private var currentTransitionID: Int?
     private var startTask: Task<Void, Never>?
     private var updateNowPlayingTask: Task<Void, Never>?
     private var jumpAvailabilityRefreshTask: Task<Void, Never>?
     private var didConfigureRemoteCommands = false
-    private var playCommandTarget: Any?
-    private var pauseCommandTarget: Any?
-    private var togglePlayPauseCommandTarget: Any?
-    private var skipForwardCommandTarget: Any?
-    private var skipBackwardCommandTarget: Any?
 
     var currentClip: EPUBMediaOverlayClip? {
         guard let currentClipIndex, clips.indices.contains(currentClipIndex) else {
@@ -951,50 +1028,21 @@ final class MediaOverlayPlaybackController: ObservableObject {
     }
 
     private func nextPlaybackTransitionID() -> Int {
-        Self.nextTransitionID += 1
-        return Self.nextTransitionID
+        nextTransitionID += 1
+        return nextTransitionID
     }
 
     deinit {
         jumpAvailabilityRefreshTask?.cancel()
         startTask?.cancel()
         updateNowPlayingTask?.cancel()
-        let player = player
-        let boundaryObserver = boundaryObserver
-        let endObserver = endObserver
-        let periodicTimeObserver = periodicTimeObserver
-        let playCommandTarget = playCommandTarget
-        let pauseCommandTarget = pauseCommandTarget
-        let togglePlayPauseCommandTarget = togglePlayPauseCommandTarget
-        let skipForwardCommandTarget = skipForwardCommandTarget
-        let skipBackwardCommandTarget = skipBackwardCommandTarget
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        // Read only the resource holder (a `let`, assigned once) — never the
+        // controller's isolated stored properties — then hand cleanup to the
+        // main thread.
+        let resources = resources
         DispatchQueue.main.async {
-            let commandCenter = MPRemoteCommandCenter.shared()
-            if let playCommandTarget {
-                commandCenter.playCommand.removeTarget(playCommandTarget)
-            }
-            if let pauseCommandTarget {
-                commandCenter.pauseCommand.removeTarget(pauseCommandTarget)
-            }
-            if let togglePlayPauseCommandTarget {
-                commandCenter.togglePlayPauseCommand.removeTarget(togglePlayPauseCommandTarget)
-            }
-            if let skipForwardCommandTarget {
-                commandCenter.skipForwardCommand.removeTarget(skipForwardCommandTarget)
-            }
-            if let skipBackwardCommandTarget {
-                commandCenter.skipBackwardCommand.removeTarget(skipBackwardCommandTarget)
-            }
-            if let periodicTimeObserver, let player {
-                player.removeTimeObserver(periodicTimeObserver)
-            }
-            if let boundaryObserver, let player {
-                player.removeTimeObserver(boundaryObserver)
-            }
-            if let endObserver {
-                NotificationCenter.default.removeObserver(endObserver)
-            }
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            resources.teardown()
         }
     }
 }
