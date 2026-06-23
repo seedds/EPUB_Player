@@ -1535,24 +1535,14 @@ struct ReaderView: View {
           const preferredTop = visibleHeight * 0.05;
           const nextTextPartThreshold = visibleBottom * 0.90;
 
-          const debugPayload = (action, nextTextPartElement, nextTextPartRect) => ({
-            action,
-            nextTextPartID: nextTextPartElement?.id ?? null,
-            nextTextPartTop: nextTextPartRect?.top ?? null,
-            visibleBottom,
-            distanceToBottom: nextTextPartRect ? (visibleBottom - nextTextPartRect.top) : null,
-            threshold: nextTextPartThreshold,
-            triggerForNext: nextTextPartRect ? nextTextPartRect.top >= nextTextPartThreshold : false
-          });
-
           const startElement = document.getElementById(\(fragmentIDLiteral));
           if (!startElement) {
-            return debugPayload('missing', null, null);
+            return;
           }
 
           const startStyle = window.getComputedStyle(startElement);
           if (startStyle.display === 'none' || startStyle.visibility === 'hidden') {
-            return debugPayload('missing', null, null);
+            return;
           }
 
           const isVisible = element => {
@@ -1575,20 +1565,20 @@ struct ReaderView: View {
           // can scroll ahead before the current clip's tail slides off the bottom.
           //
           // querySelectorAll('[id]') returns every id-bearing element in DOM order,
-          // NOT just sibling text parts. The element right after startElement in that
-          // list is very often one of its OWN descendants (Kobo wraps each sentence in
-          // nested <span id="kobo.x.y"> children). A descendant shares the current
-          // clip's bounding box, so its top equals currentRect.top — which is far above
-          // the bottom threshold. That made the "next part close to bottom" check below
-          // never fire for the last clips of a page: it kept comparing the threshold
-          // against the CURRENT clip's own top and concluded nothing needed scrolling.
+          // NOT just sibling text parts. Around startElement that list also contains its
+          // OWN descendants (Kobo wraps each sentence in nested <span id="kobo.x.y">
+          // children) and its ancestor wrappers. Both share the current clip's bounding
+          // box, so measuring them would compare the bottom threshold against the CURRENT
+          // clip's own geometry and conclude nothing needed scrolling.
           //
           // To get a genuinely-following part we skip any candidate that is:
           //   1. not visible,
           //   2. a descendant of the current clip (startElement.contains), or
-          //   3. positioned at or above the current clip's top (ancestors / wrappers
-          //      that begin at the same y as startElement).
-          // Only an element that starts strictly below the current clip qualifies.
+          //   3. an ancestor/wrapper of the current clip (candidate.contains).
+          // A following sibling sentence that continues on the SAME visual line shares
+          // currentRect.top, so we accept candidates at or below it (>=), not only the
+          // ones that start strictly lower — otherwise same-line next sentences get
+          // skipped and a later, off-screen part is measured instead.
           const nextTextPartElement = (() => {
             const identifiedElements = Array.from(document.querySelectorAll('[id]'));
             const currentIndex = identifiedElements.indexOf(startElement);
@@ -1600,7 +1590,8 @@ struct ReaderView: View {
               const candidate = identifiedElements[index];
               if (isVisible(candidate)
                   && !startElement.contains(candidate)
-                  && candidate.getBoundingClientRect().top > currentRect.top) {
+                  && !candidate.contains(startElement)
+                  && candidate.getBoundingClientRect().top >= currentRect.top) {
                 return candidate;
               }
             }
@@ -1613,17 +1604,16 @@ struct ReaderView: View {
           const currentStartPastVisibleBottom = currentRect.top >= visibleBottom;
 
           if (!nextTextPartTooCloseToBottom && (!pinCurrentClipToPreferredTop || !currentStartBeforePreferredTop && !currentStartPastVisibleBottom)) {
-            return debugPayload('noop', nextTextPartElement, nextTextPartRect);
+            return;
           }
 
           const targetTop = pinCurrentClipToPreferredTop ? preferredTop : Math.max(0, Math.min(currentRect.top, preferredTop));
           const delta = currentRect.top - targetTop;
           if (Math.abs(delta) <= 2) {
-            return debugPayload('noop', nextTextPartElement, nextTextPartRect);
+            return;
           }
 
           window.scrollBy({ top: delta, behavior: 'smooth' });
-          return debugPayload('scrolled', nextTextPartElement, nextTextPartRect);
         })();
         """
 
