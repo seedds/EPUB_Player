@@ -213,6 +213,12 @@ struct ReaderView: View {
             if playback.currentClip != nil {
                 persistLastPlayedClip(immediately: true)
             }
+            // Backgrounding while playing keeps the session active for
+            // background playback; while paused, release it immediately so
+            // other apps' audio is not blocked.
+            if !playback.state.isPlaying {
+                playback.deactivateAudioSessionNow(reason: "scenePhase.background")
+            }
         case .active:
             // colorScheme changes are ignored while inactive (see the observer
             // in readerSettingsObservers). Re-sync now that the scheme has
@@ -342,7 +348,11 @@ struct ReaderView: View {
             .onChange(of: playback.state) { oldValue, newValue in
                 if oldValue.isPlaying && !newValue.isPlaying {
                     lastHandledPlaybackStartClipKey = nil
-                    recordHistory(reason: .paused)
+                    // Defer history off the immediate state change so the
+                    // synchronous locator read does not block the tap repaint.
+                    Task { @MainActor in
+                        recordHistory(reason: .paused)
+                    }
                     return
                 }
 
