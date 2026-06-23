@@ -9,7 +9,28 @@
 import Combine
 import Foundation
 import MediaPlayer
+import os
 import UIKit
+
+/// Lightweight wrapper around `OSSignposter` for measuring the cost of the
+/// pause/resume path. Signposts compile to near-nothing when Instruments is not
+/// recording, so this can live in the codebase permanently. Open the
+/// "com.epubplayer.playback" subsystem in Instruments' os_signpost instrument to
+/// inspect the named intervals (e.g. "pause.player", "pause.deactivate").
+enum PlaybackSignposter {
+    static let signposter = OSSignposter(
+        subsystem: "com.epubplayer.playback",
+        category: "pause"
+    )
+
+    /// Measures the synchronous body of `operation` as a signpost interval.
+    @discardableResult
+    static func measure<T>(_ name: StaticString, _ operation: () -> T) -> T {
+        let state = signposter.beginInterval(name)
+        defer { signposter.endInterval(name, state) }
+        return operation()
+    }
+}
 
 /// Owns the AVPlayer-, time-observer-, and remote-command resources that must
 /// be released on the main thread. Kept as a separate reference type so the
@@ -154,6 +175,15 @@ final class MediaOverlayPlaybackController: ObservableObject {
     private var jumpAvailabilityRefreshTask: Task<Void, Never>?
     private var didConfigureRemoteCommands = false
 
+    /// Idle delay before deactivating the audio session after an ordinary pause.
+    /// An ordinary pause keeps the session active so resume is instant; if the
+    /// user does not resume within this window the session is released so other
+    /// apps' audio is not blocked.
+    private let audioSessionIdleTimeout: TimeInterval = 60
+    /// Pending deactivation scheduled by an ordinary pause. Cancelled on resume
+    /// and on every immediate-deactivation path (stop/teardown/background).
+    private var audioSessionIdleTask: Task<Void, Never>?
+
     var currentClip: EPUBMediaOverlayClip? {
         guard let currentClipIndex, clips.indices.contains(currentClipIndex) else {
             return nil
@@ -248,16 +278,36 @@ final class MediaOverlayPlaybackController: ObservableObject {
     }
 
      func pause(reason: String = "directPause") {
-          player?.pause()
-          currentTransitionID = nil
-          if clips.isEmpty {
-              state = .unavailable
-          } else {
-              state = .paused
+          // Urgent path: pause audio and flip state so the button repaints
+          // immediately. Everything else is deferred off this run-loop turn so
+          // it cannot stall the tap.
+          PlaybackSignposter.measure("pause.player") {
+              player?.pause()
           }
-         updateNowPlayingInfo(playbackRateOverride: 0)
-         deactivateAudioSession(reason: "pause[\(reason)]")
-          scheduleRefreshJumpAvailability()
+          currentTransitionID = nil
+          PlaybackSignposter.measure("pause.state") {
+              if clips.isEmpty {
+                  state = .unavailable
+              } else {
+                  state = .paused
+              }
+          }
+
+          // An ordinary pause keeps the audio session active so resume is
+          // instant; release it only after an idle timeout.
+          scheduleAudioSessionIdleDeactivation(reason: reason)
+
+          // Non-urgent work: lock-screen metadata and jump availability. Hop to
+          // the next main-actor turn so SwiftUI has already repainted the icon.
+          Task { @MainActor [weak self] in
+              guard let self else { return }
+              PlaybackSignposter.measure("pause.nowPlaying") {
+                  self.updateNowPlayingInfo(playbackRateOverride: 0)
+              }
+              PlaybackSignposter.measure("pause.jumpAvailability") {
+                  self.scheduleRefreshJumpAvailability()
+              }
+          }
       }
 
     func stop(reason: String = "directStop") {
@@ -1030,13 +1080,41 @@ final class MediaOverlayPlaybackController: ObservableObject {
     }
 
     private func configureAudioSession() throws {
+        cancelAudioSessionIdleDeactivation()
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .default)
         try session.setActive(true)
     }
 
     private func deactivateAudioSession(reason: String) {
-        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        // Any explicit deactivation supersedes a pending idle one.
+        cancelAudioSessionIdleDeactivation()
+        PlaybackSignposter.measure("pause.deactivate") {
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        }
+    }
+
+    /// Deactivates the audio session immediately. Use when the app is
+    /// backgrounded while paused so other apps' audio is not blocked.
+    func deactivateAudioSessionNow(reason: String) {
+        deactivateAudioSession(reason: reason)
+    }
+
+    /// Schedules deactivation of the audio session after `audioSessionIdleTimeout`
+    /// unless playback resumes (which cancels it via `configureAudioSession`).
+    private func scheduleAudioSessionIdleDeactivation(reason: String) {
+        audioSessionIdleTask?.cancel()
+        audioSessionIdleTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(self.audioSessionIdleTimeout * 1_000_000_000))
+            guard !Task.isCancelled, !self.state.isPlaying else { return }
+            self.deactivateAudioSession(reason: "idle[\(reason)]")
+        }
+    }
+
+    private func cancelAudioSessionIdleDeactivation() {
+        audioSessionIdleTask?.cancel()
+        audioSessionIdleTask = nil
     }
 
     private func nextPlaybackTransitionID() -> Int {
