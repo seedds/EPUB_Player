@@ -7,6 +7,31 @@ import XCTest
 @testable import EPUBPlayer
 
 final class LocalUploadServerTests: XCTestCase {
+    func testHTTPRequestParsingNormalizesMethodAndHeaders() {
+        let request = HTTPUploadRequest.parse(headerData: Data("get /api/books HTTP/1.1\r\nHost: local\r\nX-EPUBPlayer-Token: token\r\n\r\n".utf8))
+
+        XCTAssertEqual(request?.method, "GET")
+        XCTAssertEqual(request?.target, "/api/books")
+        XCTAssertEqual(request?.headers["host"], "local")
+        XCTAssertEqual(request?.headers["x-epubplayer-token"], "token")
+    }
+
+    func testHTTPRequestParsesUploadFilenameAndSanitizesIt() {
+        let request = HTTPUploadRequest.parse(headerData: Data("POST /upload?filename=My%20Book.epub HTTP/1.1\r\nContent-Length: 0\r\n\r\n".utf8))
+
+        XCTAssertEqual(request?.uploadFilename, "My Book.epub")
+    }
+
+    func testHTTPRequestParsesRenameAndDeleteRoutes() throws {
+        let bookID = UUID()
+        let rename = HTTPUploadRequest.parse(headerData: Data("POST /api/books/\(bookID.uuidString)/rename?filename=Renamed.epub HTTP/1.1\r\n\r\n".utf8))
+        let delete = HTTPUploadRequest.parse(headerData: Data("DELETE /api/books/\(bookID.uuidString) HTTP/1.1\r\n\r\n".utf8))
+
+        XCTAssertEqual(rename?.renameRequest?.bookId, bookID)
+        XCTAssertEqual(rename?.renameRequest?.filename, "Renamed.epub")
+        XCTAssertEqual(delete?.deleteBookID, bookID)
+    }
+
     func testUploadFileKindMapping() {
         XCTAssertEqual(UploadFileKind(filename: "book.epub"), .book)
         XCTAssertEqual(UploadFileKind(filename: "Book.EPUB"), .book)

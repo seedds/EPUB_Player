@@ -482,12 +482,11 @@ final class UploadServerController: ObservableObject {
             try fileManager.moveItem(at: sourceURL, to: destinationURL)
         }
 
-        let previousDisplayTitle = displayTitle(for: book.originalFilename)
-        book.originalFilename = filename
-        if book.title == previousDisplayTitle {
-            book.title = displayTitle(for: filename)
-        }
-        book.epubFilePath = AppStorage.storedBookPath(for: filename)
+        book.renameStoredFile(
+            to: filename,
+            storedPath: AppStorage.storedBookPath(for: filename),
+            displayTitle: displayTitle(for:)
+        )
         store.sortBooksByImportedAt()
         store.persistNow()
     }

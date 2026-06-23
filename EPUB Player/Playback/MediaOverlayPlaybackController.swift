@@ -1094,10 +1094,27 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
     }
 
-    /// Deactivates the audio session immediately. Use when the app is
-    /// backgrounded while paused so other apps' audio is not blocked.
-    func deactivateAudioSessionNow(reason: String) {
-        deactivateAudioSession(reason: reason)
+    func applicationDidEnterBackground() {
+        // Background playback keeps the session active. If paused, release it so
+        // other apps' audio is not blocked.
+        if !state.isPlaying {
+            deactivateAudioSession(reason: "scenePhase.background")
+        }
+    }
+
+    func applicationWillEnterForeground(
+        backgroundedFor duration: TimeInterval,
+        rewindThresholdMinutes: Int,
+        rewindSeconds: Double
+    ) async {
+        guard duration >= TimeInterval(rewindThresholdMinutes * 60),
+              currentClip != nil,
+              !state.isPlaying
+        else {
+            return
+        }
+
+        await jump(by: -rewindSeconds, reason: "autoRewindAfterBackground")
     }
 
     /// Schedules deactivation of the audio session after `audioSessionIdleTimeout`

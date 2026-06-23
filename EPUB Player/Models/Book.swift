@@ -123,6 +123,8 @@ struct HistoryEntry: Identifiable, Codable, Hashable {
 }
 
 final class Book: ObservableObject, Identifiable, Codable, Hashable {
+    static let defaultHistoryEntryLimit = 30
+
     let id: UUID
     @Published var title: String
     @Published var author: String
@@ -303,6 +305,74 @@ final class Book: ObservableObject, Identifiable, Codable, Hashable {
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
+    }
+
+    func updateLastLocation(_ locatorJSON: String?, openedAt: Date = Date()) {
+        self.lastLocatorJSON = locatorJSON
+        self.lastOpenedAt = openedAt
+    }
+
+    func updateLastPlayedClip(
+        textResourceHref: String,
+        fragmentID: String?,
+        clipBegin: Double,
+        clipEnd: Double?
+    ) {
+        lastPlayedTextResourceHref = textResourceHref
+        lastPlayedFragmentID = fragmentID
+        lastPlayedClipBegin = clipBegin
+        lastPlayedClipEnd = clipEnd
+    }
+
+    func clearLastPlayedClip() {
+        lastPlayedTextResourceHref = nil
+        lastPlayedFragmentID = nil
+        lastPlayedClipBegin = nil
+        lastPlayedClipEnd = nil
+    }
+
+    func addBookmark(_ bookmark: Bookmark) {
+        bookmarks.append(bookmark)
+    }
+
+    func removeBookmark(id: UUID) {
+        bookmarks.removeAll { $0.id == id }
+    }
+
+    func removeBookmarks(ids: Set<UUID>) {
+        bookmarks.removeAll { ids.contains($0.id) }
+    }
+
+    func removeHistoryEntries(ids: Set<UUID>) {
+        history.removeAll { ids.contains($0.id) }
+    }
+
+    func recordHistory(
+        _ entry: HistoryEntry,
+        limit: Int = Book.defaultHistoryEntryLimit,
+        isSamePosition: (HistoryEntry, HistoryEntry) -> Bool
+    ) {
+        if let newest = history.first, isSamePosition(newest, entry) {
+            history.removeFirst()
+        }
+
+        history.insert(entry, at: 0)
+        if history.count > limit {
+            history.removeLast(history.count - limit)
+        }
+    }
+
+    func renameStoredFile(
+        to filename: String,
+        storedPath: String,
+        displayTitle: (String) -> String
+    ) {
+        let previousDisplayTitle = displayTitle(originalFilename)
+        originalFilename = filename
+        if title == previousDisplayTitle {
+            title = displayTitle(filename)
+        }
+        epubFilePath = storedPath
     }
 }
 
