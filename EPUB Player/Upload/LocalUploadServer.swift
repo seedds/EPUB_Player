@@ -341,26 +341,14 @@ private final class HTTPUploadConnection {
     }
 
     private func handleRequest(headerData: Data, initialBody: Data) {
-        guard let headerText = String(data: headerData, encoding: .utf8) else {
+        guard let request = HTTPUploadRequest.parse(headerData: headerData) else {
             finishWithHTTP(status: 400, body: "Bad Request")
             return
         }
 
-        let lines = headerText.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else {
-            finishWithHTTP(status: 400, body: "Bad Request")
-            return
-        }
-
-        let requestParts = requestLine.split(separator: " ", maxSplits: 2).map(String.init)
-        guard requestParts.count >= 2 else {
-            finishWithHTTP(status: 400, body: "Bad Request")
-            return
-        }
-
-        let method = requestParts[0].uppercased()
-        let target = requestParts[1]
-        let headers = parseHeaders(lines.dropFirst())
+        let method = request.method
+        let target = request.target
+        let headers = request.headers
 
         // Auth: POST /api/auth is the one unauthenticated route (besides the
         // login page served below). Everything else requires a valid token when
@@ -390,12 +378,12 @@ private final class HTTPUploadConnection {
             return
         }
 
-        if method == "POST", let renameRequest = renameRequest(from: target) {
+        if method == "POST", let renameRequest = request.renameRequest {
             requestRename(bookId: renameRequest.bookId, filename: renameRequest.filename)
             return
         }
 
-        if method == "DELETE", let bookId = deleteBookId(from: target) {
+        if method == "DELETE", let bookId = request.deleteBookID {
             requestDelete(bookId: bookId)
             return
         }
@@ -425,7 +413,7 @@ private final class HTTPUploadConnection {
             return
         }
 
-        guard let filename = filename(from: target), UploadFileKind(filename: filename) != nil else {
+        guard let filename = request.uploadFilename, UploadFileKind(filename: filename) != nil else {
             finishWithHTTP(status: 415, body: "Only .epub, .ttf, and .otf uploads are supported")
             return
         }
@@ -658,62 +646,6 @@ private final class HTTPUploadConnection {
             totalBytes: expectedBodyLength,
             startedAt: uploadStartedAt
         )
-    }
-
-    private func parseHeaders(_ lines: ArraySlice<String>) -> [String: String] {
-        var headers: [String: String] = [:]
-        for line in lines {
-            guard let colonIndex = line.firstIndex(of: ":") else { continue }
-            let name = line[..<colonIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let value = line[line.index(after: colonIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
-            headers[name] = value
-        }
-        return headers
-    }
-
-    private func filename(from target: String) -> String? {
-        guard let components = URLComponents(string: "http://localhost\(target)"), components.path == "/upload" else {
-            return nil
-        }
-        return components.queryItems?
-            .first(where: { $0.name == "filename" })?
-            .value
-            .map(AppStorage.sanitizedFilename)
-    }
-
-    private func renameRequest(from target: String) -> (bookId: UUID, filename: String)? {
-        guard let components = URLComponents(string: "http://localhost\(target)") else {
-            return nil
-        }
-
-        let pathParts = components.path.split(separator: "/").map(String.init)
-        guard pathParts.count == 4,
-              pathParts[0] == "api",
-              pathParts[1] == "books",
-              pathParts[3] == "rename",
-              let bookId = UUID(uuidString: pathParts[2]),
-              let filename = components.queryItems?.first(where: { $0.name == "filename" })?.value
-        else {
-            return nil
-        }
-
-        return (bookId, filename)
-    }
-
-    private func deleteBookId(from target: String) -> UUID? {
-        guard let components = URLComponents(string: "http://localhost\(target)") else {
-            return nil
-        }
-
-        let pathParts = components.path.split(separator: "/").map(String.init)
-        guard pathParts.count == 3,
-              pathParts[0] == "api",
-              pathParts[1] == "books"
-        else {
-            return nil
-        }
-
-        return UUID(uuidString: pathParts[2])
     }
 
     private func reasonPhrase(for status: Int) -> String {

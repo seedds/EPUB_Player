@@ -11,15 +11,6 @@ import SwiftUI
 import UIKit
 
 nonisolated enum ReaderSettings {
-    static let fontSizeKey = "readerFontSize"
-    static let lineHeightKey = "readerLineHeight"
-    static let fontFamilyKey = "readerFontFamily"
-    static let themeKey = "readerTheme"
-    static let readAloudColorKey = "readerReadAloudColor"
-    static let playbackSpeedKey = "readerPlaybackSpeed"
-    static let playbackJumpIntervalKey = "readerPlaybackJumpInterval"
-    static let autoRewindAfterBackgroundMinutesKey = "autoRewindAfterBackgroundMinutes"
-    static let uploadServerPortKey = "uploadServerPort"
     static let defaultFontSize = 1.2
     static let defaultLineHeight = 1.2
     static let defaultReadAloudColorHex = "#34C759"
@@ -165,143 +156,36 @@ nonisolated enum ReaderSettings {
     }
 
     static func uiColor(from rawValue: String) -> UIColor {
-        colorHex(from: rawValue)
-            .flatMap(uiColor(hex:))
-            ?? uiColor(hex: defaultReadAloudColorHex)
-            ?? .systemGreen
+        ReadAloudColor.uiColor(from: rawValue)
     }
 
     static func color(from rawValue: String) -> SwiftUI.Color {
-        SwiftUI.Color(uiColor: uiColor(from: rawValue))
+        ReadAloudColor.color(from: rawValue)
     }
 
     static func readAloudColorHex(from color: SwiftUI.Color) -> String {
-        hexString(for: UIColor(color))
+        ReadAloudColor.hex(from: color)
     }
 
     static func readAloudColorText(from rawValue: String) -> String {
-        String(colorHex(from: rawValue)?.dropFirst() ?? defaultReadAloudColorHex.dropFirst())
+        ReadAloudColor.text(from: rawValue)
     }
 
     static func normalizedReadAloudColorText(_ value: String) -> String {
-        String(value.uppercased().filter(\.isHexDigit).prefix(6))
+        ReadAloudColor.normalizedText(value)
     }
 
     static func readAloudColorHex(from text: String) -> String? {
-        let normalized = normalizedReadAloudColorText(text)
-        guard normalized.count == 6 else {
-            return nil
-        }
-        return "#\(normalized)"
+        ReadAloudColor.hex(from: text)
     }
 
     static func readAloudColorHSB(from rawValue: String) -> ReadAloudColorHSB {
-        let color = uiColor(from: rawValue)
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-
-        guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
-            return .default
-        }
-
-        let maxValue = max(red, green, blue)
-        let minValue = min(red, green, blue)
-        let delta = maxValue - minValue
-
-        let hue: CGFloat
-        if delta == 0 {
-            hue = 0
-        } else if maxValue == red {
-            hue = ((green - blue) / delta).truncatingRemainder(dividingBy: 6)
-        } else if maxValue == green {
-            hue = ((blue - red) / delta) + 2
-        } else {
-            hue = ((red - green) / delta) + 4
-        }
-
-        let normalizedHue = hue < 0 ? (hue + 6) / 6 : hue / 6
-        let saturation = maxValue == 0 ? 0 : delta / maxValue
-
-        return ReadAloudColorHSB(
-            hue: clamp(Double(normalizedHue)),
-            saturation: clamp(Double(saturation)),
-            brightness: clamp(Double(maxValue))
-        )
+        ReadAloudColor.hsb(from: rawValue)
     }
 
     static func readAloudColorHex(hue: Double, saturation: Double, brightness: Double) -> String {
-        hexString(
-            for: UIColor(
-                hue: clamp(hue),
-                saturation: clamp(saturation),
-                brightness: clamp(brightness),
-                alpha: 1
-            )
-        )
+        ReadAloudColor.hex(hue: hue, saturation: saturation, brightness: brightness)
     }
-
-    private static func colorHex(from value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count == 7, trimmed.hasPrefix("#") else {
-            return nil
-        }
-
-        let hex = trimmed.dropFirst()
-        guard hex.allSatisfy({ $0.isHexDigit }) else {
-            return nil
-        }
-
-        return trimmed.uppercased()
-    }
-
-    private static func uiColor(hex: String) -> UIColor? {
-        guard let hex = colorHex(from: hex) else {
-            return nil
-        }
-
-        let scanner = Scanner(string: String(hex.dropFirst()))
-        var hexNumber: UInt64 = 0
-        guard scanner.scanHexInt64(&hexNumber) else {
-            return nil
-        }
-
-        return UIColor(
-            red: CGFloat((hexNumber & 0xFF0000) >> 16) / 255,
-            green: CGFloat((hexNumber & 0x00FF00) >> 8) / 255,
-            blue: CGFloat(hexNumber & 0x0000FF) / 255,
-            alpha: 1
-        )
-    }
-
-    private static func hexString(for color: UIColor) -> String {
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-
-        guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
-            return defaultReadAloudColorHex
-        }
-
-        let rgb = (Int(round(red * 255)) << 16)
-            | (Int(round(green * 255)) << 8)
-            | Int(round(blue * 255))
-        return String(format: "#%06X", rgb)
-    }
-
-    private static func clamp(_ value: Double) -> Double {
-        min(max(value, 0), 1)
-    }
-}
-
-nonisolated struct ReadAloudColorHSB: Equatable {
-    let hue: Double
-    let saturation: Double
-    let brightness: Double
-
-    static let `default` = ReadAloudColorHSB(hue: 0.4, saturation: 0.74, brightness: 0.78)
 }
 
 enum ReadingBackgroundOption: String, CaseIterable, Identifiable {
@@ -408,169 +292,6 @@ nonisolated enum AppThemeOption: String, CaseIterable, Identifiable {
         case .dark:
             return .dark
         }
-    }
-}
-
-struct ReaderSettingSliderRow: View {
-    let title: String
-    let valueText: String
-    @Binding var value: Double
-    let range: ClosedRange<Double>
-    let step: Double
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-
-                Spacer(minLength: 12)
-
-                Text(valueText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Slider(value: $value, in: range, step: step)
-                .accessibilityLabel(title)
-                .accessibilityValue(valueText)
-        }
-    }
-}
-
-struct FontFamilySelectionList: View {
-    let customFontFamilies: [CustomFontStore.ImportedFontFamily]
-    @Binding var selectedFontFamilyRawValue: String
-    let onSelect: (() -> Void)?
-    var showsSeparators = false
-
-    var body: some View {
-        let options = ReaderSettings.fontFamilyOptions(customFontFamilies: customFontFamilies)
-
-        ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
-            VStack(spacing: 0) {
-                Button {
-                    selectedFontFamilyRawValue = option.id
-                    onSelect?()
-                } label: {
-                    HStack(spacing: 12) {
-                        Text(option.name)
-                            .font(previewFont(for: option))
-
-                        Spacer(minLength: 12)
-
-                        if option.id == selectedFontFamilyRawValue {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(.tint)
-                        }
-                    }
-                    .frame(minHeight: 24)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                if showsSeparators && index < options.count - 1 {
-                    Divider()
-                }
-            }
-        }
-    }
-
-    private func previewFont(for option: FontFamilyOption) -> Font {
-        let fontSize = previewFontSize(for: option)
-
-        if let customFamily = customFontFamilies.first(where: { $0.fontFamily == option.id }),
-           let fontName = previewFontName(forFamilyName: customFamily.displayName) {
-            return .custom(fontName, size: fontSize)
-        }
-
-        if let fontName = previewFontName(forFamilyName: option.name) {
-            return .custom(fontName, size: fontSize)
-        }
-
-        return .body
-    }
-
-    private func previewFontSize(for option: FontFamilyOption) -> CGFloat {
-        let baseSize = UIFont.preferredFont(forTextStyle: .body).pointSize
-
-        guard let previewUIFont = previewUIFont(for: option, baseSize: baseSize) else {
-            return baseSize
-        }
-
-        let baseFont = UIFont.preferredFont(forTextStyle: .body)
-        let previewXHeight = max(previewUIFont.xHeight, 1)
-        let previewCapHeight = max(previewUIFont.capHeight, 1)
-        let blendedScale = ((baseFont.xHeight / previewXHeight) * 0.7) + ((baseFont.capHeight / previewCapHeight) * 0.3)
-
-        let previewFamilyName = resolvedPreviewFamilyName(for: option)
-        let tunedScale: CGFloat
-        switch option.name {
-        case "Palatino":
-            tunedScale = blendedScale * 0.86
-        case "Georgia":
-            tunedScale = blendedScale * 0.88
-        case "Seravek":
-            tunedScale = blendedScale * 0.92
-        default:
-            if previewFamilyName == "Bookerly" {
-                tunedScale = blendedScale * 0.82
-            } else if customFontFamilies.contains(where: { $0.fontFamily == option.id }) {
-                tunedScale = blendedScale * 0.88
-            } else {
-                tunedScale = blendedScale * 0.9
-            }
-        }
-
-        let scale = min(max(tunedScale, 0.76), 1.0)
-        return baseSize * scale
-    }
-
-    private func previewUIFont(for option: FontFamilyOption, baseSize: CGFloat) -> UIFont? {
-        if let customFamily = customFontFamilies.first(where: { $0.fontFamily == option.id }),
-           let fontName = previewFontName(forFamilyName: customFamily.displayName) {
-            return UIFont(name: fontName, size: baseSize)
-        }
-
-        if let fontName = previewFontName(forFamilyName: option.name) {
-            return UIFont(name: fontName, size: baseSize)
-        }
-
-        return nil
-    }
-
-    private func resolvedPreviewFamilyName(for option: FontFamilyOption) -> String {
-        if let customFamily = customFontFamilies.first(where: { $0.fontFamily == option.id }) {
-            return customFamily.displayName
-        }
-
-        return option.name
-    }
-
-    private func previewFontName(forFamilyName familyName: String) -> String? {
-        if let exactFont = UIFont(name: familyName, size: 17) {
-            return exactFont.fontName
-        }
-
-        return UIFont.fontNames(forFamilyName: familyName).first
-    }
-}
-
-struct FontFamilySelectionView: View {
-    @Binding var selectedFontFamilyRawValue: String
-    let customFontFamilies: [CustomFontStore.ImportedFontFamily]
-
-    var body: some View {
-        List {
-            FontFamilySelectionList(
-                customFontFamilies: customFontFamilies,
-                selectedFontFamilyRawValue: $selectedFontFamilyRawValue,
-                onSelect: nil
-            )
-        }
-        .navigationTitle("Font Family")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

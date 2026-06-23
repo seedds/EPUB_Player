@@ -109,7 +109,7 @@ struct ReaderView: View {
                     }
                 },
                 onDeleteBookmarks: { ids in
-                    book.bookmarks.removeAll { ids.contains($0.id) }
+                    book.removeBookmarks(ids: ids)
                 },
                 onSelectHistory: { entry in
                     guard case .ready(_, let navigator) = state else {
@@ -121,7 +121,7 @@ struct ReaderView: View {
                     }
                 },
                 onDeleteHistory: { ids in
-                    book.history.removeAll { ids.contains($0.id) }
+                    book.removeHistoryEntries(ids: ids)
                     store.persistNow()
                 }
             )
@@ -142,6 +142,9 @@ struct ReaderView: View {
             lastHandledPlaybackStartClipKey = nil
             pendingDecorationClipKey = nil
             backgroundEnteredAt = nil
+            // Ensure the screen-awake flag can't leak past playback if the
+            // reader is closed while still playing.
+            UIApplication.shared.isIdleTimerDisabled = false
             playback.stop(reason: "readerView.onDisappear")
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -157,7 +160,7 @@ struct ReaderView: View {
             return
         }
 
-        book.lastOpenedAt = Date()
+        book.updateLastLocation(book.lastLocatorJSON)
         store.persistNow()
         playback.setPlaybackRate(store.playbackSpeed)
         playback.setJumpInterval(store.playbackJumpInterval)
@@ -213,12 +216,7 @@ struct ReaderView: View {
             if playback.currentClip != nil {
                 persistLastPlayedClip(immediately: true)
             }
-            // Backgrounding while playing keeps the session active for
-            // background playback; while paused, release it immediately so
-            // other apps' audio is not blocked.
-            if !playback.state.isPlaying {
-                playback.deactivateAudioSessionNow(reason: "scenePhase.background")
-            }
+            playback.applicationDidEnterBackground()
         case .active:
             // colorScheme changes are ignored while inactive (see the observer
             // in readerSettingsObservers). Re-sync now that the scheme has
@@ -229,35 +227,22 @@ struct ReaderView: View {
                 applyThemeBackground()
                 applyReaderPreferences(to: navigator)
             }
-            await handleAutoRewindIfNeeded()
+            if let backgroundEnteredAt {
+                self.backgroundEnteredAt = nil
+                let requiredMinutes = ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(
+                    store.autoRewindAfterBackgroundMinutes
+                )
+                await playback.applicationWillEnterForeground(
+                    backgroundedFor: Date().timeIntervalSince(backgroundEnteredAt),
+                    rewindThresholdMinutes: requiredMinutes,
+                    rewindSeconds: 10
+                )
+            }
         case .inactive:
             break
         @unknown default:
             break
         }
-    }
-
-    @MainActor
-    private func handleAutoRewindIfNeeded() async {
-        guard let backgroundEnteredAt else {
-            return
-        }
-
-        self.backgroundEnteredAt = nil
-
-        let requiredMinutes = ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(
-            store.autoRewindAfterBackgroundMinutes
-        )
-        let requiredBackgroundDuration = TimeInterval(requiredMinutes * 60)
-
-        guard Date().timeIntervalSince(backgroundEnteredAt) >= requiredBackgroundDuration,
-              playback.currentClip != nil,
-              !playback.state.isPlaying
-        else {
-            return
-        }
-
-        await playback.jump(by: -10, reason: "autoRewindAfterBackground")
     }
 
     @ViewBuilder
@@ -346,6 +331,11 @@ struct ReaderView: View {
                 handleCurrentClipChange(oldIndex: oldIndex, newIndex: newIndex, navigator: navigator)
             }
             .onChange(of: playback.state) { oldValue, newValue in
+                // Keep the screen fully awake while reading aloud so iOS does
+                // not dim or lock the device mid-playback; restore normal
+                // auto-lock for every non-playing state.
+                UIApplication.shared.isIdleTimerDisabled = newValue.isPlaying
+
                 if oldValue.isPlaying && !newValue.isPlaying {
                     lastHandledPlaybackStartClipKey = nil
                     // Defer history off the immediate state change so the
@@ -681,8 +671,7 @@ struct ReaderView: View {
     private func saveLocation(_ locator: Locator) {
         // Mutating the book already schedules a debounced save; a synchronous
         // full-state write per scroll tick would hitch the main thread.
-        book.lastLocatorJSON = locator.jsonString
-        book.lastOpenedAt = Date()
+        book.updateLastLocation(locator.jsonString)
     }
 
     @MainActor
@@ -701,17 +690,16 @@ struct ReaderView: View {
                 return
             }
 
-            book.lastPlayedTextResourceHref = nil
-            book.lastPlayedFragmentID = nil
-            book.lastPlayedClipBegin = nil
-            book.lastPlayedClipEnd = nil
+            book.clearLastPlayedClip()
             return
         }
 
-        book.lastPlayedTextResourceHref = normalizedResourceHref(for: clip.textResourceHref)
-        book.lastPlayedFragmentID = clip.fragmentID
-        book.lastPlayedClipBegin = clip.clipBegin
-        book.lastPlayedClipEnd = clip.clipEnd
+        book.updateLastPlayedClip(
+            textResourceHref: normalizedResourceHref(for: clip.textResourceHref),
+            fragmentID: clip.fragmentID,
+            clipBegin: clip.clipBegin,
+            clipEnd: clip.clipEnd
+        )
     }
 
     @MainActor
@@ -731,26 +719,18 @@ struct ReaderView: View {
     }
 
     private func restoredLastPlayedClipIndex() -> Int? {
-        guard let storedResourceHref = book.lastPlayedTextResourceHref,
-              let storedClipBegin = book.lastPlayedClipBegin
-        else {
+        guard book.lastPlayedClipBegin != nil else {
             return nil
         }
 
-        let normalizedStoredResourceHref = normalizedResourceHref(for: storedResourceHref)
-        if let exactMatch = playback.clips.firstIndex(where: { clip in
-            normalizedResourceHref(for: clip.textResourceHref) == normalizedStoredResourceHref &&
-            clip.fragmentID == book.lastPlayedFragmentID &&
-            clip.clipBegin == storedClipBegin &&
-            clip.clipEnd == book.lastPlayedClipEnd
-        }) {
-            return exactMatch
-        }
-
-        return playback.clips.firstIndex(where: { clip in
-            normalizedResourceHref(for: clip.textResourceHref) == normalizedStoredResourceHref &&
-            clip.fragmentID == book.lastPlayedFragmentID
-        })
+        return ClipLocationMatcher.savedPositionIndex(
+            textResourceHref: book.lastPlayedTextResourceHref,
+            fragmentID: book.lastPlayedFragmentID,
+            clipBegin: book.lastPlayedClipBegin,
+            clipEnd: book.lastPlayedClipEnd,
+            clips: playback.clips,
+            normalize: normalizedResourceHref(for:)
+        )
     }
 
     @MainActor
@@ -837,7 +817,7 @@ struct ReaderView: View {
         }
 
         if let existing = matchingBookmark() {
-            book.bookmarks.removeAll { $0.id == existing.id }
+            book.removeBookmark(id: existing.id)
             store.persistNow()
             return
         }
@@ -845,7 +825,7 @@ struct ReaderView: View {
         let snapshot = currentPositionSnapshot(for: locator)
         Task { @MainActor in
             let clipText = await readCurrentClipText(with: navigator)
-            book.bookmarks.append(
+            book.addBookmark(
                 Bookmark(
                     chapterTitle: snapshot.chapterTitle,
                     locatorJSON: snapshot.locatorJSON,
@@ -916,8 +896,6 @@ struct ReaderView: View {
         return snapshot
     }
 
-    private static let historyEntryLimit = 30
-
     @MainActor
     private func recordHistory(reason: HistoryEventReason) {
         guard case .ready(_, let navigator) = state,
@@ -945,16 +923,7 @@ struct ReaderView: View {
                 clipCountInChapter: snapshot.clipCountInChapter
             )
 
-            // Collapse a consecutive record at the same position into the newest
-            // entry instead of stacking duplicates.
-            if let newest = book.history.first, isSameHistoryPosition(newest, entry) {
-                book.history.removeFirst()
-            }
-
-            book.history.insert(entry, at: 0)
-            if book.history.count > Self.historyEntryLimit {
-                book.history.removeLast(book.history.count - Self.historyEntryLimit)
-            }
+            book.recordHistory(entry, isSamePosition: isSameHistoryPosition)
             store.persistNow()
         }
     }
@@ -1067,24 +1036,14 @@ struct ReaderView: View {
         clipBegin: Double?,
         clipEnd: Double?
     ) -> Int? {
-        guard let textResourceHref else {
-            return nil
-        }
-
-        let resourceHref = normalizedResourceHref(for: textResourceHref)
-        if let exactMatch = playback.clips.firstIndex(where: { clip in
-            normalizedResourceHref(for: clip.textResourceHref) == resourceHref &&
-            clip.fragmentID == fragmentID &&
-            clip.clipBegin == clipBegin &&
-            clip.clipEnd == clipEnd
-        }) {
-            return exactMatch
-        }
-
-        return playback.clips.firstIndex(where: { clip in
-            normalizedResourceHref(for: clip.textResourceHref) == resourceHref &&
-            clip.fragmentID == fragmentID
-        })
+        ClipLocationMatcher.savedPositionIndex(
+            textResourceHref: textResourceHref,
+            fragmentID: fragmentID,
+            clipBegin: clipBegin,
+            clipEnd: clipEnd,
+            clips: playback.clips,
+            normalize: normalizedResourceHref(for:)
+        )
     }
 
     @MainActor
@@ -1296,22 +1255,12 @@ struct ReaderView: View {
     }
 
     private func exactClipIndex(for reference: EPUBReference) -> Int? {
-        guard let fragmentID = reference.fragmentID,
-              !fragmentID.isEmpty
-        else {
-            return nil
-        }
-
-        let exactReference = EPUBReference(
+        ClipLocationMatcher.exactIndex(
             resourceHref: reference.resourceHref,
-            fragmentID: fragmentID
+            fragmentID: reference.fragmentID,
+            clips: playback.clips,
+            normalize: normalizedResourceHref(for:)
         )
-
-        let match = playback.clips.firstIndex(where: { clip in
-            normalizedResourceHref(for: clip.textResourceHref) == exactReference.resourceHref &&
-            clip.fragmentID == exactReference.fragmentID
-        })
-        return match
     }
 
     private func firstClipIndex(for link: ReadiumShared.Link) -> Int? {
@@ -1319,53 +1268,29 @@ struct ReaderView: View {
     }
 
     private func firstClipIndex(for reference: EPUBReference) -> Int? {
-        let chapterReference = reference
-
-        if let exactMatch = playback.clips.firstIndex(where: { clip in
-            normalizedReference(for: clip.textResourceHref) == chapterReference
-        }) {
-            return exactMatch
-        }
-
-        // Clip hrefs are fragment-stripped at creation, so a fragment reference
-        // (e.g. a TOC entry into the middle of a file) must match on the clip's
-        // own fragmentID, not fall through to the file's first clip.
-        if let fragmentID = chapterReference.fragmentID,
-           let fragmentMatch = playback.clips.firstIndex(where: { clip in
-               normalizedResourceHref(for: clip.textResourceHref) == chapterReference.resourceHref &&
-               clip.fragmentID == fragmentID
-           }) {
-            return fragmentMatch
-        }
-
-        return playback.clips.firstIndex(where: { clip in
-            normalizedResourceHref(for: clip.textResourceHref) == chapterReference.resourceHref
-        })
+        ClipLocationMatcher.firstIndex(
+            resourceHref: reference.resourceHref,
+            fragmentID: reference.fragmentID,
+            clips: playback.clips,
+            normalize: normalizedResourceHref(for:)
+        )
     }
 
     private func firstClipIndex(forResourceHref resourceHref: String) -> Int? {
-        playback.clips.firstIndex(where: { clip in
-            normalizedResourceHref(for: clip.textResourceHref) == resourceHref
-        })
+        ClipLocationMatcher.firstIndex(
+            resourceHref: resourceHref,
+            clips: playback.clips,
+            normalize: normalizedResourceHref(for:)
+        )
     }
 
     private func firstClipIndex(afterResourceHref resourceHref: String) -> Int? {
-        guard let currentResourceOrder = readingOrderResourceHrefs.firstIndex(of: resourceHref) else {
-            return nil
-        }
-
-        for (index, clip) in playback.clips.enumerated() {
-            let clipResourceHref = normalizedResourceHref(for: clip.textResourceHref)
-            guard let clipResourceOrder = readingOrderResourceHrefs.firstIndex(of: clipResourceHref),
-                  clipResourceOrder > currentResourceOrder
-            else {
-                continue
-            }
-
-            return index
-        }
-
-        return nil
+        ClipLocationMatcher.firstIndexAfterResource(
+            resourceHref,
+            readingOrderResourceHrefs: readingOrderResourceHrefs,
+            clips: playback.clips,
+            normalize: normalizedResourceHref(for:)
+        )
     }
 
     private func normalizedReference(for href: String) -> EPUBReference {
