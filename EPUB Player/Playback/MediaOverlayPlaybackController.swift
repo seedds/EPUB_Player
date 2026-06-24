@@ -67,15 +67,28 @@ private final class PlaybackResources: @unchecked Sendable {
         if let skipBackwardCommandTarget {
             commandCenter.skipBackwardCommand.removeTarget(skipBackwardCommandTarget)
         }
+        // Nil each token as it is removed (and drop the player at the end) so a
+        // second teardown — or a teardown racing an in-flight observer
+        // registration — cannot remove the same time-observer token twice, which
+        // over-releases it and aborts with "pointer being freed was not allocated".
         if let periodicTimeObserver, let player {
             player.removeTimeObserver(periodicTimeObserver)
         }
+        periodicTimeObserver = nil
         if let boundaryObserver, let player {
             player.removeTimeObserver(boundaryObserver)
         }
+        boundaryObserver = nil
         if let endObserver {
             NotificationCenter.default.removeObserver(endObserver)
         }
+        endObserver = nil
+        playCommandTarget = nil
+        pauseCommandTarget = nil
+        togglePlayPauseCommandTarget = nil
+        skipForwardCommandTarget = nil
+        skipBackwardCommandTarget = nil
+        player = nil
     }
 }
 
@@ -469,30 +482,33 @@ final class MediaOverlayPlaybackController: ObservableObject {
 
                 let player = self.applyPreparedPlayer(audioURL: audioURL, for: clip)
                 player.pause()
-                player.seek(to: CMTime(seconds: clip.clipBegin, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, clip, player] _ in
-                    guard let self else { return }
-                    DispatchQueue.main.async {
-                        guard self.isCurrentClip(clip) else {
-                            return
-                        }
+                // Await the seek inside this task instead of using the callback
+                // form, so the post-seek work stays anchored to `startTask`'s
+                // lifetime. An escaping seek-completion handler could outlive the
+                // task (and the controller), racing the deinit teardown of the
+                // player's time observers and double-freeing an observer token.
+                await player.seek(
+                    to: CMTime(seconds: clip.clipBegin, preferredTimescale: 600),
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero
+                )
 
-                        guard self.currentTransitionID == transitionID else {
-                            return
-                        }
-
-                        self.addObservers(for: clip, reason: reason, transitionID: transitionID)
-                        player.play()
-                        self.state = .playing
-                        self.applyPlaybackRateIfNeeded(
-                            player: player,
-                            shouldUpdateActiveRate: true,
-                            reason: "start[\(reason)]",
-                            transitionID: transitionID
-                        )
-                        self.updateNowPlayingInfo(playbackRateOverride: Float(self.playbackRate))
-                        self.scheduleRefreshJumpAvailability()
-                    }
+                guard !Task.isCancelled,
+                      self.isCurrentClip(clip), self.currentTransitionID == transitionID else {
+                    return
                 }
+
+                self.addObservers(for: clip, reason: reason, transitionID: transitionID)
+                player.play()
+                self.state = .playing
+                self.applyPlaybackRateIfNeeded(
+                    player: player,
+                    shouldUpdateActiveRate: true,
+                    reason: "start[\(reason)]",
+                    transitionID: transitionID
+                )
+                self.updateNowPlayingInfo(playbackRateOverride: Float(self.playbackRate))
+                self.scheduleRefreshJumpAvailability()
             } catch {
                 // A stale preparation failure must not clobber the state of a
                 // newer clip that is already playing.
