@@ -21,7 +21,7 @@ struct NormalizedBookStoragePaths: Equatable {
     let mediaOverlayJSONPath: String?
 }
 
-struct Bookmark: Identifiable, Codable, Hashable {
+nonisolated struct Bookmark: Identifiable, Codable, Hashable {
     let id: UUID
     var chapterTitle: String?
     var locatorJSON: String?
@@ -70,7 +70,7 @@ struct Bookmark: Identifiable, Codable, Hashable {
     }
 }
 
-struct HistoryEntry: Identifiable, Codable, Hashable {
+nonisolated struct HistoryEntry: Identifiable, Codable, Hashable {
     let id: UUID
     var reason: String?
     var chapterTitle: String?
@@ -122,7 +122,7 @@ struct HistoryEntry: Identifiable, Codable, Hashable {
     }
 }
 
-final class Book: ObservableObject, Identifiable, Codable, Hashable {
+nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable {
     static let defaultHistoryEntryLimit = 30
 
     let id: UUID
