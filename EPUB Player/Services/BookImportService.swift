@@ -1247,3 +1247,24 @@ final class MediaOverlayPreparationCoordinator {
         )
     }
 }
+
+#if DEBUG
+extension MediaOverlayPreparationCoordinator {
+    /// Cancels and drains all in-flight preparation work. Used by tests that
+    /// create transient EPUB libraries so background preparation cannot keep
+    /// touching deleted files after the test has moved on to another suite.
+    func test_cancelAllPreparations() async {
+        let activeTasks = Array(tasks.values)
+        tasks.removeAll()
+        progressSnapshots.removeAll()
+        progressObservers.removeAll()
+
+        for task in activeTasks {
+            task.cancel()
+        }
+        for task in activeTasks {
+            await task.value
+        }
+    }
+}
+#endif
