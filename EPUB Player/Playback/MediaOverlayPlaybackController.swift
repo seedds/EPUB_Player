@@ -1160,12 +1160,24 @@ final class MediaOverlayPlaybackController: ObservableObject {
         startTask?.cancel()
         updateNowPlayingTask?.cancel()
         // Read only the resource holder (a `let`, assigned once) — never the
-        // controller's isolated stored properties — then hand cleanup to the
-        // main thread.
+        // controller's isolated stored properties.
         let resources = resources
-        DispatchQueue.main.async {
+        // Tear observers down synchronously when deinit already runs on the main
+        // thread. Deferring to `DispatchQueue.main.async` left the time-observer
+        // removal to fire on a later run-loop turn — potentially in the middle of
+        // an unrelated later XCTest — which raced other AVPlayer teardown and
+        // over-released an observer token ("pointer being freed was not
+        // allocated"). Doing it inline ties the teardown to this object's
+        // lifetime. Off the main thread (the AVPlayer APIs require main), fall
+        // back to a synchronous hop.
+        if Thread.isMainThread {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             resources.teardown()
+        } else {
+            DispatchQueue.main.sync {
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+                resources.teardown()
+            }
         }
     }
 }
@@ -1200,5 +1212,11 @@ extension MediaOverlayPlaybackController {
     /// True when the most recent start transition's task has been cancelled.
     /// Used to verify a superseded start stops its audio-resolution work.
     var test_isStartTaskCancelled: Bool { startTask?.isCancelled ?? false }
+
+    /// Synchronously tears the controller down for tests so AVPlayer observer
+    /// removal is completed before the test releases its last reference.
+    func test_teardown() {
+        stop(reason: "test_teardown")
+    }
 }
 #endif
