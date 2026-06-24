@@ -37,7 +37,7 @@ enum PlaybackSignposter {
 /// controller's `nonisolated deinit` can hand off cleanup by reading a single
 /// `let` holder instead of touching the controller's `@MainActor`-isolated
 /// stored properties directly (which is a data race under strict concurrency).
-private final class PlaybackResources: @unchecked Sendable {
+nonisolated private final class PlaybackResources: @unchecked Sendable {
     var player: AVPlayer?
     var boundaryObserver: Any?
     var endObserver: NSObjectProtocol?
