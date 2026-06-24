@@ -29,4 +29,5 @@ jobs:
           xcodebuild test \
             -scheme "EPUB Player" \
             -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.device }}" \
+            -enableAddressSanitizer YES \
             CODE_SIGNING_ALLOWED=NO
