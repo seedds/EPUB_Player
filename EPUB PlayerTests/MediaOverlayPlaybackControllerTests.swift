@@ -8,6 +8,22 @@ import XCTest
 
 @MainActor
 final class MediaOverlayPlaybackControllerTests: XCTestCase {
+    private var controller: MediaOverlayPlaybackController!
+
+    override func setUp() async throws {
+        try await super.setUp()
+        controller = MediaOverlayPlaybackController()
+    }
+
+    override func tearDown() async throws {
+        controller?.test_teardown()
+        controller = nil
+        // Drain one main-queue turn so any observer callbacks queued by AVPlayer
+        // complete before the next XCTest starts.
+        await Task.yield()
+        try await super.tearDown()
+    }
+
     private func makeClip(audioPath: String, fragmentID: String) -> EPUBMediaOverlayClip {
         EPUBMediaOverlayClip(
             textHref: "chapter.xhtml#\(fragmentID)",
@@ -26,7 +42,6 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
     /// which left auto-advance stuck at chapter boundaries. The end-of-item
     /// observer is the fallback that keeps playback advancing.
     func testClipWithClipEndStillRegistersEndOfItemObserver() async throws {
-        let controller = MediaOverlayPlaybackController()
         let clip = makeClip(audioPath: "audio.mp3", fragmentID: "a")
         let url = URL(fileURLWithPath: "/tmp/audio.mp3")
 
@@ -35,7 +50,7 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
         controller.selectClip(at: 0, autoplay: true, reason: "test-end-observer")
 
         try await waitUntil(timeout: 5) {
-            controller.test_hasEndObserver
+            self.controller.test_hasEndObserver
         }
 
         XCTAssertTrue(
@@ -49,8 +64,6 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
     /// it. The older resolution is gated to complete only after the newer clip
     /// has finished applying its player, making the race deterministic.
     func testStaleStartDoesNotClobberNewerClipPlayerState() async throws {
-        let controller = MediaOverlayPlaybackController()
-
         let clipA = makeClip(audioPath: "audioA.mp3", fragmentID: "a")
         let clipB = makeClip(audioPath: "audioB.mp3", fragmentID: "b")
 
@@ -80,7 +93,7 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
         // applies its player.
         controller.selectClip(at: 1, autoplay: true, reason: "test-B")
         try await waitUntil(timeout: 5) {
-            controller.test_loadedAudioPath == clipB.audioPath
+            self.controller.test_loadedAudioPath == clipB.audioPath
         }
 
         // Now let the stale A resolution complete. It must NOT overwrite B.
@@ -100,8 +113,6 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
     /// A superseded start must cancel its in-flight audio-resolution task so the
     /// older transition stops working instead of running to completion.
     func testStartingNewerClipCancelsPriorStartTask() async throws {
-        let controller = MediaOverlayPlaybackController()
-
         let clipA = makeClip(audioPath: "audioA.mp3", fragmentID: "a")
         let clipB = makeClip(audioPath: "audioB.mp3", fragmentID: "b")
 
@@ -127,7 +138,7 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
         // Start clip B while A is suspended — this should cancel A's start task.
         controller.selectClip(at: 1, autoplay: true, reason: "test-B")
         try await waitUntil(timeout: 5) {
-            controller.test_loadedAudioPath == clipB.audioPath
+            self.controller.test_loadedAudioPath == clipB.audioPath
         }
 
         XCTAssertTrue(
