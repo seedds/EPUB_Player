@@ -6,6 +6,7 @@
 import XCTest
 @testable import EPUBPlayer
 
+@MainActor
 final class BookTests: XCTestCase {
     func testRecordHistoryCollapsesConsecutiveDuplicateAndKeepsNewest() {
         let book = makeBook()
