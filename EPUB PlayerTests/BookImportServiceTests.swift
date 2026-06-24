@@ -25,8 +25,11 @@ final class BookImportServiceTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        await MediaOverlayPreparationCoordinator.shared.test_cancelAllPreparations()
+        store = nil
         try? FileManager.default.removeItem(at: tempDirectory)
         TestDocumentsDirectory.deactivate(rootURL: tempDocumentsDirectory)
+        tempDirectory = nil
         tempDocumentsDirectory = nil
         try await super.tearDown()
     }
