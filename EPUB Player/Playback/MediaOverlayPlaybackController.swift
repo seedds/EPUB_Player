@@ -41,6 +41,7 @@ nonisolated private final class PlaybackResources: @unchecked Sendable {
     var player: AVPlayer?
     var boundaryObserver: Any?
     var endObserver: NSObjectProtocol?
+    var interruptionObserver: NSObjectProtocol?
     var periodicTimeObserver: Any?
     var playCommandTarget: Any?
     var pauseCommandTarget: Any?
@@ -83,6 +84,10 @@ nonisolated private final class PlaybackResources: @unchecked Sendable {
             NotificationCenter.default.removeObserver(endObserver)
         }
         endObserver = nil
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
+        interruptionObserver = nil
         playCommandTarget = nil
         pauseCommandTarget = nil
         togglePlayPauseCommandTarget = nil
@@ -152,6 +157,10 @@ final class MediaOverlayPlaybackController: ObservableObject {
         get { resources.endObserver }
         set { resources.endObserver = newValue }
     }
+    private var interruptionObserver: NSObjectProtocol? {
+        get { resources.interruptionObserver }
+        set { resources.interruptionObserver = newValue }
+    }
     private var periodicTimeObserver: Any? {
         get { resources.periodicTimeObserver }
         set { resources.periodicTimeObserver = newValue }
@@ -187,6 +196,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
     private var updateNowPlayingTask: Task<Void, Never>?
     private var jumpAvailabilityRefreshTask: Task<Void, Never>?
     private var didConfigureRemoteCommands = false
+    private var didRegisterInterruptionObserver = false
 
     /// Idle delay before deactivating the audio session after an ordinary pause.
     /// An ordinary pause keeps the session active so resume is instant; if the
@@ -1100,6 +1110,48 @@ final class MediaOverlayPlaybackController: ObservableObject {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .default)
         try session.setActive(true)
+        registerInterruptionObserverIfNeeded(for: session)
+    }
+
+    /// Observes audio-session interruptions (e.g. an incoming phone call) so the
+    /// controller's published state stays in sync with the system. iOS pauses
+    /// the underlying `AVPlayer` automatically on interruption; without this the
+    /// controller would still report `.playing`, leaving the play button showing
+    /// the pause icon and requiring two taps to resume.
+    private func registerInterruptionObserverIfNeeded(for session: AVAudioSession) {
+        guard !didRegisterInterruptionObserver else {
+            return
+        }
+        didRegisterInterruptionObserver = true
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleAudioSessionInterruption(notification)
+            }
+        }
+    }
+
+    private func handleAudioSessionInterruption(_ notification: Notification) {
+        guard let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue)
+        else {
+            return
+        }
+
+        // On `.began` the system has already paused the player. Sync state to
+        // `.paused` so the button repaints to "play" and a single subsequent tap
+        // resumes. We deliberately do not auto-resume on `.ended`: the user taps
+        // play to continue.
+        guard type == .began, state.isPlaying else {
+            return
+        }
+
+        state = .paused
+        updateNowPlayingInfo(playbackRateOverride: 0)
+        scheduleRefreshJumpAvailability()
     }
 
     private func deactivateAudioSession(reason: String) {
