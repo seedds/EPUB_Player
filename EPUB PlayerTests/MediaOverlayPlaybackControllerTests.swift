@@ -3,6 +3,7 @@
 //  EPUB PlayerTests
 //
 
+import AVFoundation
 import XCTest
 @testable import EPUBPlayer
 
@@ -153,6 +154,41 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
             controller.test_loadedAudioPath,
             clipB.audioPath,
             "Superseded clip A start must not clobber clip B"
+        )
+    }
+
+    /// An audio-session interruption (e.g. an incoming phone call) pauses the
+    /// underlying player at the system level. The controller must sync its
+    /// published state to `.paused` so the play button repaints correctly and a
+    /// single tap resumes — without this the button stayed in the playing state
+    /// and required two taps.
+    func testAudioSessionInterruptionPausesPlaybackState() async throws {
+        let clip = makeClip(audioPath: "audio.mp3", fragmentID: "a")
+        let url = URL(fileURLWithPath: "/tmp/audio.mp3")
+
+        controller.configureForTesting(clips: [clip]) { _ in url }
+        controller.selectClip(at: 0, autoplay: true, reason: "test-interruption")
+
+        try await waitUntil(timeout: 5) {
+            self.controller.state.isPlaying
+        }
+
+        NotificationCenter.default.post(
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            userInfo: [
+                AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue
+            ]
+        )
+
+        try await waitUntil(timeout: 5) {
+            self.controller.state == .paused
+        }
+
+        XCTAssertEqual(
+            controller.state,
+            .paused,
+            "An interruption .began must move the controller out of the playing state so the button shows play"
         )
     }
 
