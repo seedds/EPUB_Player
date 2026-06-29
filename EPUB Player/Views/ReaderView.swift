@@ -1343,19 +1343,29 @@ struct ReaderView: View {
         clip.identityKey
     }
 
+    /// Reference used to highlight the active chapter. Prefers the current
+    /// clip's location so the chapters list tracks read-aloud playback even when
+    /// the user has scrolled away; falls back to the visible reading position.
+    private var activeChapterReference: EPUBReference? {
+        if let clip = playback.currentClip {
+            return normalizedReference(for: clip.textResourceHref)
+        }
+        return currentLocationReference
+    }
+
     private var activeChapterItemID: ChapterListItem.ID? {
-        guard let currentLocationReference else {
+        guard let activeChapterReference else {
             return nil
         }
 
         if let exactMatch = chapterItems.last(where: { item in
-            normalizedReference(for: item.link.href) == currentLocationReference
+            normalizedReference(for: item.link.href) == activeChapterReference
         }) {
             return exactMatch.id
         }
 
         return chapterItems.last(where: { item in
-            normalizedResourceHref(for: item.link.href) == currentLocationReference.resourceHref
+            normalizedResourceHref(for: item.link.href) == activeChapterReference.resourceHref
         })?.id
     }
 
@@ -2010,33 +2020,47 @@ private struct ChapterListScreen: View {
                     description: Text("This book doesn't expose a table of contents.")
                 )
             } else {
-                List {
-                    ForEach(items) { item in
-                        let isSelected = selectedItemID == item.id
-                        Button {
-                            onSelect(item)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Text(item.title)
-                                    .fontWeight(isSelected ? .semibold : .regular)
-                                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                ScrollViewReader { proxy in
+                    List {
+                        ForEach(items) { item in
+                            let isSelected = selectedItemID == item.id
+                            Button {
+                                onSelect(item)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Text(item.title)
+                                        .fontWeight(isSelected ? .semibold : .regular)
+                                        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                                if isSelected {
-                                    Image(systemName: "checkmark")
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(Color.accentColor)
+                                    if isSelected {
+                                        Image(systemName: "checkmark")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(Color.accentColor)
+                                    }
                                 }
+                                .padding(.leading, CGFloat(item.level * 16))
+                                .contentShape(Rectangle())
                             }
-                            .padding(.leading, CGFloat(item.level * 16))
-                            .contentShape(Rectangle())
+                            .buttonStyle(.plain)
+                            .id(item.id)
                         }
-                        .buttonStyle(.plain)
+                    }
+                    .listStyle(.plain)
+                    .onAppear {
+                        guard let selectedItemID else {
+                            return
+                        }
+                        // Defer one runloop so the List has laid out its rows
+                        // before scrolling; scrollTo is unreliable during the
+                        // initial layout pass when the screen is first presented.
+                        DispatchQueue.main.async {
+                            proxy.scrollTo(selectedItemID, anchor: .center)
+                        }
                     }
                 }
-                .listStyle(.plain)
             }
         }
     }
