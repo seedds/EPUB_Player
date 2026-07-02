@@ -22,6 +22,25 @@ final class LocalUploadServerTests: XCTestCase {
         XCTAssertEqual(request?.uploadFilename, "My Book.epub")
     }
 
+    func testHTTPRequestRejectsDuplicateContentLength() {
+        // A conflicting duplicate Content-Length is a request-smuggling vector.
+        let request = HTTPUploadRequest.parse(headerData: Data(
+            "POST /upload?filename=x.epub HTTP/1.1\r\nContent-Length: 10\r\nContent-Length: 20\r\n\r\n".utf8
+        ))
+        XCTAssertNil(request, "Duplicate Content-Length headers must be rejected")
+    }
+
+    func testHTTPRequestRejectsMalformedRequestLine() {
+        XCTAssertNil(
+            HTTPUploadRequest.parse(headerData: Data("GET /api/books\r\n\r\n".utf8)),
+            "A request line missing the HTTP-version must be rejected"
+        )
+        XCTAssertNil(
+            HTTPUploadRequest.parse(headerData: Data("GARBAGE\r\n\r\n".utf8)),
+            "A single-token request line must be rejected"
+        )
+    }
+
     func testHTTPRequestParsesRenameAndDeleteRoutes() throws {
         let bookID = UUID()
         let rename = HTTPUploadRequest.parse(headerData: Data("POST /api/books/\(bookID.uuidString)/rename?filename=Renamed.epub HTTP/1.1\r\n\r\n".utf8))

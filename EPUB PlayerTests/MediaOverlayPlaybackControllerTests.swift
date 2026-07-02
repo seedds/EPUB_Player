@@ -75,7 +75,8 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
     /// observer is the fallback that keeps playback advancing.
     func testClipWithClipEndStillRegistersEndOfItemObserver() async throws {
         let clip = makeClip(audioPath: "audio.mp3", fragmentID: "a")
-        let url = URL(fileURLWithPath: "/tmp/audio.mp3")
+        let url = try AudioFixture.makeSilentFile(seconds: 5)
+        defer { try? FileManager.default.removeItem(at: url) }
 
         controller.configureForTesting(clips: [clip]) { _ in url }
 
@@ -195,7 +196,8 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
     /// and required two taps.
     func testAudioSessionInterruptionPausesPlaybackState() async throws {
         let clip = makeClip(audioPath: "audio.mp3", fragmentID: "a")
-        let url = URL(fileURLWithPath: "/tmp/audio.mp3")
+        let url = try AudioFixture.makeSilentFile(seconds: 5)
+        defer { try? FileManager.default.removeItem(at: url) }
 
         controller.configureForTesting(clips: [clip]) { _ in url }
         controller.selectClip(at: 0, autoplay: true, reason: "test-interruption")
@@ -220,6 +222,118 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
             controller.state,
             .paused,
             "An interruption .began must move the controller out of the playing state so the button shows play"
+        )
+    }
+
+    /// Unplugging headphones posts a `.oldDeviceUnavailable` route change; iOS
+    /// pauses the player at the system level. Without a route-change observer
+    /// the controller kept reporting `.playing`, leaving silent audio, the wrong
+    /// button icon, and stale lock-screen info.
+    func testRouteChangeOldDeviceUnavailablePausesPlaybackState() async throws {
+        let clip = makeClip(audioPath: "audio.mp3", fragmentID: "a")
+        let url = try AudioFixture.makeSilentFile(seconds: 5)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        controller.configureForTesting(clips: [clip]) { _ in url }
+        controller.selectClip(at: 0, autoplay: true, reason: "test-route-change")
+
+        try await waitUntil(timeout: 5) {
+            self.controller.state.isPlaying
+        }
+
+        NotificationCenter.default.post(
+            name: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            userInfo: [
+                AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue
+            ]
+        )
+
+        try await waitUntil(timeout: 5) {
+            self.controller.state == .paused
+        }
+
+        XCTAssertEqual(
+            controller.state,
+            .paused,
+            "A .oldDeviceUnavailable route change must move the controller out of the playing state"
+        )
+    }
+
+    /// A route change that is not `.oldDeviceUnavailable` (e.g. a new device
+    /// became available) must not pause playback.
+    func testUnrelatedRouteChangeDoesNotPausePlayback() async throws {
+        let clip = makeClip(audioPath: "audio.mp3", fragmentID: "a")
+        let url = try AudioFixture.makeSilentFile(seconds: 5)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        controller.configureForTesting(clips: [clip]) { _ in url }
+        controller.selectClip(at: 0, autoplay: true, reason: "test-route-change-unrelated")
+
+        try await waitUntil(timeout: 5) {
+            self.controller.state.isPlaying
+        }
+
+        NotificationCenter.default.post(
+            name: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            userInfo: [
+                AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.newDeviceAvailable.rawValue
+            ]
+        )
+
+        // Give the observer a chance to (wrongly) run.
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertTrue(
+            controller.state.isPlaying,
+            "A newDeviceAvailable route change must not pause playback"
+        )
+    }
+
+    /// A corrupt/unplayable audio item must surface `.failed` via the item's
+    /// status observation instead of leaving the controller stuck at `.playing`
+    /// with silent audio. Uses a genuinely unplayable URL so the real KVO path
+    /// runs end to end.
+    func testUnplayableItemMovesStateToFailed() async throws {
+        let clip = makeClip(audioPath: "audio.mp3", fragmentID: "a")
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString)-missing.m4a", isDirectory: false)
+
+        controller.configureForTesting(clips: [clip]) { _ in url }
+        controller.selectClip(at: 0, autoplay: true, reason: "test-item-failure")
+
+        try await waitUntil(timeout: 5) {
+            if case .failed = self.controller.state { return true }
+            return false
+        }
+
+        guard case .failed = controller.state else {
+            return XCTFail("An unplayable item must move the controller to .failed, got \(controller.state)")
+        }
+    }
+
+    /// Deterministic companion to the KVO-driven failure test: drives the same
+    /// failure-handling path directly so the state transition is covered without
+    /// depending on AVFoundation decode timing.
+    func testSimulatedItemFailureMovesStateToFailed() async throws {
+        let clip = makeClip(audioPath: "audio.mp3", fragmentID: "a")
+        let url = try AudioFixture.makeSilentFile(seconds: 5)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        controller.configureForTesting(clips: [clip]) { _ in url }
+        controller.selectClip(at: 0, autoplay: true, reason: "test-item-failure-sim")
+
+        try await waitUntil(timeout: 5) {
+            self.controller.state.isPlaying
+        }
+
+        controller.test_simulateCurrentItemFailure(message: "corrupt audio")
+
+        XCTAssertEqual(
+            controller.state,
+            .failed("corrupt audio"),
+            "A failed player item must move the controller to .failed, not stay .playing"
         )
     }
 

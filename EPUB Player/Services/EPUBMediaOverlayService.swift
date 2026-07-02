@@ -222,6 +222,8 @@ enum EPUBMediaOverlayService {
             }
         }
 
+        candidates = orderedBySpine(candidates, spineItemRefs: package.spineItemRefs)
+
         var documents: [EPUBMediaOverlayDocument] = []
         let candidateCount = max(candidates.count, 1)
         for (index, candidate) in candidates.enumerated() {
@@ -283,6 +285,38 @@ enum EPUBMediaOverlayService {
         item.mediaType == "application/smil+xml" || item.href.lowercased().hasSuffix(".smil")
     }
 
+    /// Reorders media-overlay candidates to follow `<spine>` reading order. The
+    /// EPUB spec only guarantees reading order via the spine; the manifest may
+    /// be declared in a different order (some tools alphabetize it), which made
+    /// auto-advance jump between chapters out of order. Candidates whose content
+    /// item is absent from the spine (or all candidates, when the OPF has no
+    /// spine) keep their original relative order.
+    nonisolated private static func orderedBySpine(
+        _ candidates: [(contentItem: EPUBPackageInfo.ManifestItem?, smilItem: EPUBPackageInfo.ManifestItem)],
+        spineItemRefs: [String]
+    ) -> [(contentItem: EPUBPackageInfo.ManifestItem?, smilItem: EPUBPackageInfo.ManifestItem)] {
+        guard !spineItemRefs.isEmpty else {
+            return candidates
+        }
+
+        let spinePosition = Dictionary(
+            spineItemRefs.enumerated().map { ($0.element, $0.offset) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        // Items not in the spine sort after spine items, preserving their
+        // original order via the enumeration index tiebreaker.
+        let fallbackPosition = spineItemRefs.count
+
+        return candidates.enumerated().sorted { lhs, rhs in
+            let lhsSpine = lhs.element.contentItem.flatMap { spinePosition[$0.id] } ?? fallbackPosition
+            let rhsSpine = rhs.element.contentItem.flatMap { spinePosition[$0.id] } ?? fallbackPosition
+            if lhsSpine != rhsSpine {
+                return lhsSpine < rhsSpine
+            }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+
     nonisolated fileprivate static func relativePath(for url: URL, root: URL) -> String? {
         AppStorage.relativePath(from: url.path, under: root.path)
     }
@@ -302,6 +336,16 @@ enum EPUBMediaOverlayTimeParser {
     nonisolated static func seconds(from value: String?) -> Double? {
         guard var text = value?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
             return nil
+        }
+
+        // Strip an RFC 2326 "npt=" (normal play time) prefix. Without this a
+        // value like "npt=0:00:05.5" parses to nil (and clipBegin coalesces to
+        // 0), so a clip never advances at its intended time.
+        if text.lowercased().hasPrefix("npt=") {
+            text = String(text.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else {
+                return nil
+            }
         }
 
         text = text.replacingOccurrences(of: ",", with: ".")

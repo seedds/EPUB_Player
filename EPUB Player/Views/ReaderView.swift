@@ -40,6 +40,11 @@ struct ReaderView: View {
     @State private var openingSecondaryMessage: String?
     @State private var openingProgress: Double?
     @State private var hasRestoredPlaybackState = false
+    /// True while media overlays are being (re)loaded. A reload transiently nils
+    /// `currentClipIndex`, which must NOT be mistaken for the user clearing
+    /// playback — otherwise a background re-import/cache refresh wipes the saved
+    /// resume point mid-session.
+    @State private var isReloadingOverlays = false
 
     var body: some View {
         Group {
@@ -133,6 +138,13 @@ struct ReaderView: View {
             persistLastPlayedClip(immediately: true)
             isPlaybackSpeedControlPresented = false
             isReaderSettingsControlPresented = false
+            // Clear the screen-awake flag whenever we're not actively playing,
+            // even if the chapter/bookmarks screen is on top. Otherwise popping
+            // the reader off the stack while that screen is presented skips the
+            // teardown below and leaves the idle timer disabled indefinitely.
+            if !playback.state.isPlaying {
+                UIApplication.shared.isIdleTimerDisabled = false
+            }
             // Don't tear down playback when disappearing because we pushed the
             // chapters/bookmarks screen on top of the reader; only stop when the
             // reader is actually being closed.
@@ -520,7 +532,20 @@ struct ReaderView: View {
 
     @MainActor
     private func loadMediaOverlaysIfAvailable() async {
+        // Guard the resume point: `playback.load` nils `currentClipIndex`, which
+        // fires `handleCurrentClipChange` -> `persistLastPlayedClip`. Without
+        // this flag a mid-session reload would clear the saved clip.
+        //
+        // The `.onChange` that observes `currentClipIndex` is delivered by
+        // SwiftUI on a later main-actor turn, not synchronously with the
+        // mutation inside `load`. Keep the flag set until after that turn by
+        // resetting it via a trailing hop, so the clip-change handler still sees
+        // the reload in progress.
+        isReloadingOverlays = true
         await playback.load(for: book, from: try? book.resolvedMediaOverlayJSONURL())
+        Task { @MainActor in
+            isReloadingOverlays = false
+        }
     }
 
     private var readAloudStatusMessage: String? {
@@ -692,14 +717,12 @@ struct ReaderView: View {
         }
 
         guard let clip = playback.currentClip else {
-            // A nil clip before restore has run means the book is still
-            // opening, not that the user cleared playback — keep the saved
-            // resume point.
-            guard hasRestoredPlaybackState else {
-                return
+            if ReaderView.shouldClearSavedClip(
+                hasRestoredPlaybackState: hasRestoredPlaybackState,
+                isReloadingOverlays: isReloadingOverlays
+            ) {
+                book.clearLastPlayedClip()
             }
-
-            book.clearLastPlayedClip()
             return
         }
 
@@ -709,6 +732,20 @@ struct ReaderView: View {
             clipBegin: clip.clipBegin,
             clipEnd: clip.clipEnd
         )
+    }
+
+    /// Whether a nil current clip should clear the saved resume point.
+    ///
+    /// Only a genuine user stop should clear it. Two cases must NOT:
+    /// - Before playback state has been restored (the book is still opening).
+    /// - During a mid-session overlay reload, which transiently nils the clip
+    ///   index while clips are rebuilt (e.g. a background re-import or cache
+    ///   refresh). Clearing here wiped the saved position and stopped playback.
+    nonisolated static func shouldClearSavedClip(
+        hasRestoredPlaybackState: Bool,
+        isReloadingOverlays: Bool
+    ) -> Bool {
+        hasRestoredPlaybackState && !isReloadingOverlays
     }
 
     @MainActor
@@ -2588,6 +2625,28 @@ private struct PlaybackBarFramePreferenceKey: PreferenceKey {
     }
 }
 
+/// Forwards `WKScriptMessage`s to its target without retaining it.
+///
+/// `WKUserContentController.add(_:name:)` strongly retains its handler, and
+/// Readium creates a separate `WKUserContentController` per spread view (with
+/// neighbors preloaded, several exist at once). Registering the Coordinator
+/// directly therefore created a retain cycle
+/// (UCC → Coordinator → closures → navigator → spread → UCC) that leaked the
+/// navigator and its `WKWebView`s on every reader dismissal. Registering this
+/// weak proxy instead breaks the cycle at the source, regardless of how many
+/// controllers Readium spins up.
+final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WKScriptMessageHandler?
+
+    init(target: WKScriptMessageHandler) {
+        self.target = target
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(userContentController, didReceive: message)
+    }
+}
+
 private struct EPUBNavigatorHost: UIViewControllerRepresentable {
     let navigator: EPUBNavigatorViewController
     let onLocationDidChange: (Locator) -> Void
@@ -2627,6 +2686,10 @@ private struct EPUBNavigatorHost: UIViewControllerRepresentable {
         var onAudioTap: (String, CGPoint) -> Void
         private weak var navigator: EPUBNavigatorViewController?
         private weak var userContentController: WKUserContentController?
+        /// Registered with every `WKUserContentController` in place of `self` so
+        /// no controller strongly retains the Coordinator. See
+        /// `WeakScriptMessageHandler`.
+        private lazy var messageHandlerProxy = WeakScriptMessageHandler(target: self)
         private var panRecognizer: UIPanGestureRecognizer?
         private var currentViewport: EPUBNavigatorViewController.Viewport?
         private var armedBoundaryEdge: BoundaryEdge?
@@ -2694,7 +2757,10 @@ private struct EPUBNavigatorHost: UIViewControllerRepresentable {
         func navigator(_ navigator: EPUBNavigatorViewController, setupUserScripts userContentController: WKUserContentController) {
             self.userContentController = userContentController
             userContentController.removeScriptMessageHandler(forName: audioTapMessageName)
-            userContentController.add(self, name: audioTapMessageName)
+            // Register a weak proxy, not `self`: the UCC retains its handler
+            // strongly, and Readium creates one UCC per spread. Registering the
+            // Coordinator directly leaked the navigator on every dismissal.
+            userContentController.add(messageHandlerProxy, name: audioTapMessageName)
             userContentController.addUserScript(
                 WKUserScript(
                     source: lineHeightOverrideScript(),

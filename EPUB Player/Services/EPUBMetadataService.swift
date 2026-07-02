@@ -57,6 +57,10 @@ struct EPUBPackageInfo {
     var mediaDuration: Double?
     var mediaNarrator: String?
     var manifestItems: [ManifestItem] = []
+    /// Manifest item ids in `<spine>` (`itemref`) order. The spine — not the
+    /// manifest — defines reading order, so this drives media-overlay document
+    /// ordering. Empty when the OPF declares no spine.
+    var spineItemRefs: [String] = []
 
     nonisolated init(
         packageURL: URL,
@@ -69,7 +73,8 @@ struct EPUBPackageInfo {
         mediaPlaybackActiveClass: String? = nil,
         mediaDuration: Double? = nil,
         mediaNarrator: String? = nil,
-        manifestItems: [ManifestItem] = []
+        manifestItems: [ManifestItem] = [],
+        spineItemRefs: [String] = []
     ) {
         self.packageURL = packageURL
         self.title = title
@@ -82,6 +87,7 @@ struct EPUBPackageInfo {
         self.mediaDuration = mediaDuration
         self.mediaNarrator = mediaNarrator
         self.manifestItems = manifestItems
+        self.spineItemRefs = spineItemRefs
     }
 }
 
@@ -211,14 +217,18 @@ nonisolated private final class ContainerParser: NSObject, XMLParserDelegate {
     }
 
     nonisolated func parse(data: Data) -> String? {
-        parse(XMLParser(data: data))
+        // A malformed container.xml must surface as a parse failure, not a
+        // silently-nil rootfile that looks like a valid-but-empty container.
+        guard parse(XMLParser(data: data)) else {
+            return nil
+        }
         return fullPath
     }
 
-    nonisolated private func parse(_ parser: XMLParser) {
+    nonisolated private func parse(_ parser: XMLParser) -> Bool {
         fullPath = nil
         parser.delegate = self
-        parser.parse()
+        return parser.parse()
     }
 
     nonisolated func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
@@ -239,13 +249,18 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
     }
 
     nonisolated func parse(data: Data) -> EPUBPackageInfo? {
-        parse(XMLParser(data: data))
+        // A malformed OPF must fail rather than yield a partially-parsed
+        // package: a truncated manifest would wrongly prune valid bookmarks on
+        // reimport (they'd appear to reference missing resources).
+        guard parse(XMLParser(data: data)) else {
+            return nil
+        }
         return package
     }
 
-    nonisolated private func parse(_ parser: XMLParser) {
+    nonisolated private func parse(_ parser: XMLParser) -> Bool {
         parser.delegate = self
-        parser.parse()
+        return parser.parse()
     }
 
     nonisolated func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
@@ -290,6 +305,12 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
                 mediaOverlay: attributeDict["media-overlay"],
                 properties: properties
             ))
+
+        case "itemref":
+            // Spine reading order. `idref` points at a manifest item id.
+            if let idref = attributeDict["idref"] {
+                package.spineItemRefs.append(idref)
+            }
 
         default:
             break

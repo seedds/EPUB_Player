@@ -405,13 +405,13 @@ extension Book {
         guard let storedPath = normalizedStoragePaths.coverImagePath else {
             return nil
         }
-        return try AppStorage.coversDirectory().appendingPathComponent(storedPath, isDirectory: false)
+        return try AppStorage.containedFileURL(base: AppStorage.coversDirectory(), storedPath: storedPath)
     }
 
     func resolvedMediaOverlayJSONURL() throws -> URL? {
         guard let storedPath = normalizedStoragePaths.mediaOverlayJSONPath else {
             return nil
         }
-        return try AppStorage.mediaOverlaysDirectory().appendingPathComponent(storedPath, isDirectory: false)
+        return try AppStorage.containedFileURL(base: AppStorage.mediaOverlaysDirectory(), storedPath: storedPath)
     }
 }

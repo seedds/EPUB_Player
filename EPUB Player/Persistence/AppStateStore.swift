@@ -192,6 +192,9 @@ final class AppStateStore: ObservableObject {
     private var saveTask: Task<Void, Never>?
     private var isHydratingState = false
     private var canPersistState = true
+    #if DEBUG
+    private var diskWriteCount = 0
+    #endif
 
     deinit {
         saveTask?.cancel()
@@ -475,6 +478,13 @@ final class AppStateStore: ObservableObject {
         saveTask?.cancel()
         saveTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
+            // A superseding mutation cancels this task during the sleep; without
+            // this guard `try?` swallows the CancellationError and every
+            // cancelled save still writes, defeating the debounce (N mutations
+            // -> N full-library encodes + disk writes on the main actor).
+            guard !Task.isCancelled else {
+                return
+            }
             self?.writeStateToDisk()
         }
     }
@@ -489,5 +499,16 @@ final class AppStateStore: ObservableObject {
         }
 
         try? data.write(to: stateURL, options: .atomic)
+        #if DEBUG
+        diskWriteCount += 1
+        #endif
     }
 }
+
+#if DEBUG
+extension AppStateStore {
+    /// Number of times state has actually been flushed to disk. Lets tests
+    /// verify the save debounce coalesces a burst of mutations into one write.
+    var test_diskWriteCount: Int { diskWriteCount }
+}
+#endif

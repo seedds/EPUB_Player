@@ -48,7 +48,7 @@ enum BookImportService {
         let id: UUID
         let filename: String
         let epubFilePath: String
-        let metadata: EPUBMetadata
+        var metadata: EPUBMetadata
         let mediaOverlayJSONPath: String?
         let mediaOverlayActiveClass: String?
         let mediaOverlayDuration: Double?
@@ -59,6 +59,10 @@ enum BookImportService {
         /// Content-document hrefs from the new EPUB manifest, used to validate
         /// saved positions on reimport.
         let resourceHrefs: [String]
+        /// A new cover written under a temporary staging name during prepare, or
+        /// nil when the EPUB has no cover. Promoted to the canonical name at
+        /// commit so a failed overwrite cannot destroy the existing cover.
+        let stagedCoverFilename: String?
     }
 
     private struct StagedLibraryFile: Sendable {
@@ -71,6 +75,11 @@ enum BookImportService {
         case skip
         case overwrite
     }
+
+    /// Leading-dot prefix for in-library staging files. Dot-prefixed so an
+    /// in-progress import is skipped by the `.skipsHiddenFiles` library scan;
+    /// `removeStalePartialImports` reclaims any left behind by a crash/cancel.
+    nonisolated static let stagedImportPrefix = ".import-"
 
     @MainActor
     @discardableResult
@@ -114,14 +123,17 @@ enum BookImportService {
             return nil
         }
 
-        try Task.checkCancellation()
-
         await reportProgress(
             ImportProgress(fractionCompleted: 0.96, message: "Saving book..."),
             using: progressHandler
         )
 
         do {
+            // Inside the do/catch so a cancellation landing here cleans up the
+            // already-staged file and cover instead of leaking them (the staged
+            // `.import-*` file is dot-prefixed, so no sweep would reclaim it).
+            try Task.checkCancellation()
+
             let book = try applyPreparedImport(
                 preparedImport,
                 existingBookID: existingBook?.id,
@@ -154,6 +166,11 @@ enum BookImportService {
             RefreshProgress(fractionCompleted: 0.02, message: "Scanning EPUB files..."),
             using: progressHandler
         )
+
+        // Reclaim any dot-prefixed `.import-*` staging files orphaned by an
+        // import that was cancelled/crashed mid-flight. The normal library scan
+        // uses `.skipsHiddenFiles`, so these would otherwise never be found.
+        removeStalePartialImports()
 
         let existingBooks = store.books
         let fileManager = FileManager.default
@@ -325,6 +342,22 @@ enum BookImportService {
     ) throws -> Book {
         try finalizeStagedLibraryFile(preparedImport.stagedLibraryFile)
 
+        // Commit cover + overlay changes only now, so a prepare that failed or
+        // was cancelled could not have destroyed the existing book's assets.
+        // The old overlay artifacts are stale once the EPUB content changed.
+        try? BookAssetCacheService.removeOverlayArtifacts(for: preparedImport.id)
+        var preparedImport = preparedImport
+        if let stagedCoverFilename = preparedImport.stagedCoverFilename {
+            let finalCoverPath = try BookAssetCacheService.commitStagedCover(
+                stagedFilename: stagedCoverFilename,
+                for: preparedImport.id
+            )
+            preparedImport.metadata.coverImagePath = finalCoverPath
+        } else {
+            // No new cover: the reimported EPUB has none, so drop any prior one.
+            try? BookAssetCacheService.removeCachedCover(for: preparedImport.id)
+        }
+
         let book = upsertBook(
             from: preparedImport,
             existingBook: existingBookID.flatMap { bookForID($0, store: store) },
@@ -409,6 +442,14 @@ enum BookImportService {
 
     @MainActor
     private static func applyResourceHrefValidatedPositions(to book: Book, resourceHrefs: [String]) {
+        // No resource hrefs means the manifest couldn't be read (e.g. a
+        // malformed OPF). Validating against an empty set would wrongly prune
+        // every position, so keep them all rather than trust an unknown
+        // structure.
+        guard !resourceHrefs.isEmpty else {
+            return
+        }
+
         let positions = BookPositionValidator.Positions(
             lastLocatorJSON: book.lastLocatorJSON,
             lastPlayedTextResourceHref: book.lastPlayedTextResourceHref,
@@ -464,21 +505,26 @@ enum BookImportService {
         )
 
         let stagedURL = stagedLibraryFile.fileURL
-        let fingerprint = try sourceFileFingerprint(for: stagedURL)
-        if case .skip = existingBookStrategy,
-           let existingBook,
-           shouldSkipPreparedBook(for: stagedLibraryFile.destinationURL, existingBook: existingBook, fingerprint: fingerprint) {
-            await reportProgress(
-                ImportProgress(fractionCompleted: 1, message: "Book already exists, skipping"),
-                using: progressHandler
-            )
-            if stagedLibraryFile.shouldCleanupOnFailure {
-                try? FileManager.default.removeItem(at: stagedURL)
-            }
-            return nil
-        }
 
+        // Everything after staging runs in this cleanup scope. Previously the
+        // fingerprint read and skip-check sat outside the do/catch, so a throw
+        // (or cancellation) between staging and prepare leaked the dot-prefixed
+        // `.import-*` staged file, which no sweep reclaims.
         do {
+            let fingerprint = try sourceFileFingerprint(for: stagedURL)
+            if case .skip = existingBookStrategy,
+               let existingBook,
+               shouldSkipPreparedBook(for: stagedLibraryFile.destinationURL, existingBook: existingBook, fingerprint: fingerprint) {
+                await reportProgress(
+                    ImportProgress(fractionCompleted: 1, message: "Book already exists, skipping"),
+                    using: progressHandler
+                )
+                if stagedLibraryFile.shouldCleanupOnFailure {
+                    try? FileManager.default.removeItem(at: stagedURL)
+                }
+                return nil
+            }
+
             let preparedImport = try await preparedBookImport(
                 validating: stagedURL,
                 stagedLibraryFile: stagedLibraryFile,
@@ -529,9 +575,14 @@ enum BookImportService {
             ImportProgress(fractionCompleted: 0.8, message: "Caching cover..."),
             using: progressHandler
         )
-        metadata.coverImagePath = try await cacheCoverImage(from: archive, package: package, bookID: bookID)
-
-        try? BookAssetCacheService.removeOverlayArtifacts(for: bookID)
+        // Stage the cover under a temporary name and DON'T remove overlay
+        // artifacts here: on overwrite, `bookID` is the existing book's id, so
+        // destroying its cover/overlay during prepare would damage the book we
+        // are replacing if this import then fails or is cancelled. Both are
+        // committed only in `applyPreparedImport`.
+        let stagedCoverFilename = try await cacheStagedCoverImage(from: archive, package: package, bookID: bookID)
+        // The final cover path is resolved at commit; leave it nil for now.
+        metadata.coverImagePath = nil
 
         return PreparedBookImport(
             stagedLibraryFile: stagedLibraryFile,
@@ -546,8 +597,25 @@ enum BookImportService {
             mediaOverlayPreparationState: .pending,
             mediaOverlayPreparationError: nil,
             fingerprint: fingerprint,
-            resourceHrefs: contentResourceHrefs(from: package)
+            resourceHrefs: contentResourceHrefs(from: package),
+            stagedCoverFilename: stagedCoverFilename
         )
+    }
+
+    /// Prepare-time cover caching: writes the new cover under a staging name
+    /// without disturbing any existing cover. Returns the staged filename (or
+    /// nil when the EPUB has no cover).
+    nonisolated private static func cacheStagedCoverImage(
+        from archive: EPUBArchive,
+        package: EPUBPackageInfo?,
+        bookID: UUID
+    ) async throws -> String? {
+        guard let package,
+              let coverAsset = try await EPUBMetadataService.coverImageAsset(in: archive, package: package)
+        else {
+            return nil
+        }
+        return try BookAssetCacheService.cacheStagedCoverImage(asset: coverAsset, for: bookID)
     }
 
     /// Content-document hrefs (XHTML/HTML) from the parsed package manifest,
@@ -582,7 +650,7 @@ enum BookImportService {
         let libraryDirectory = try AppStorage.booksDirectory()
         let destinationURL = libraryDirectory.appendingPathComponent(filename, isDirectory: false)
         let stagedURL = libraryDirectory.appendingPathComponent(
-            ".import-\(UUID().uuidString)-\(filename)",
+            "\(stagedImportPrefix)\(UUID().uuidString)-\(filename)",
             isDirectory: false
         )
         let sourcePath = sourceURL.standardizedFileURL.path
@@ -862,18 +930,29 @@ enum BookImportService {
             try? fileManager.removeItem(at: preparedImport.stagedLibraryFile.fileURL)
         }
 
-        if let coverPath = preparedImport.metadata.coverImagePath,
-           let coverURL = try? AppStorage.coversDirectory().appendingPathComponent(coverPath) {
-            try? fileManager.removeItem(at: coverURL)
+        // Only the staged (not-yet-committed) cover is ours to remove. The
+        // canonical cover, overlay artifacts, and audio cache belong to the
+        // existing book on an overwrite and must survive a failed import.
+        if let stagedCoverFilename = preparedImport.stagedCoverFilename {
+            BookAssetCacheService.removeStagedCover(stagedFilename: stagedCoverFilename)
+        }
+    }
+
+    /// Deletes dot-prefixed `.import-*` staging files orphaned in the library by
+    /// an import that was cancelled or crashed between staging and commit.
+    nonisolated static func removeStalePartialImports() {
+        guard let libraryDirectory = try? AppStorage.booksDirectory(),
+              let contents = try? FileManager.default.contentsOfDirectory(
+                  at: libraryDirectory,
+                  includingPropertiesForKeys: nil,
+                  options: []
+              )
+        else {
+            return
         }
 
-        if let overlayPath = preparedImport.mediaOverlayJSONPath,
-           let overlayURL = try? AppStorage.mediaOverlaysDirectory().appendingPathComponent(overlayPath) {
-            try? fileManager.removeItem(at: overlayURL)
-        }
-
-        if let audioCacheDir = try? AppStorage.audioCacheDirectory(for: bookID) {
-            try? fileManager.removeItem(at: audioCacheDir)
+        for fileURL in contents where fileURL.lastPathComponent.hasPrefix(stagedImportPrefix) {
+            try? FileManager.default.removeItem(at: fileURL)
         }
     }
 }
@@ -895,6 +974,54 @@ enum BookAssetCacheService {
         let destinationURL = try AppStorage.coverImageURL(for: bookID, pathExtension: asset.pathExtension)
         try asset.data.write(to: destinationURL, options: .atomic)
         return destinationURL.lastPathComponent
+    }
+
+    /// Writes a new cover under a temporary staging name WITHOUT touching any
+    /// existing cover, returning the staged filename. Used during import prepare
+    /// so a failed/cancelled overwrite does not destroy the book it replaces.
+    /// Call `commitStagedCover` to promote it to the final name.
+    nonisolated static func cacheStagedCoverImage(asset: EPUBArchiveAsset, for bookID: UUID) throws -> String {
+        let ext = asset.pathExtension.isEmpty ? "img" : asset.pathExtension
+        let stagedFilename = "\(bookID.uuidString).import-\(UUID().uuidString).\(ext)"
+        let destinationURL = try AppStorage.coversDirectory()
+            .appendingPathComponent(stagedFilename, isDirectory: false)
+        try asset.data.write(to: destinationURL, options: .atomic)
+        return stagedFilename
+    }
+
+    /// Promotes a staged cover to the canonical `<bookID>.<ext>` name, removing
+    /// any prior cover only now (at commit). Returns the final filename.
+    nonisolated static func commitStagedCover(stagedFilename: String, for bookID: UUID) throws -> String {
+        let coversDirectory = try AppStorage.coversDirectory()
+        let stagedURL = coversDirectory.appendingPathComponent(stagedFilename, isDirectory: false)
+        let ext = URL(fileURLWithPath: stagedFilename).pathExtension
+        let finalURL = try AppStorage.coverImageURL(for: bookID, pathExtension: ext)
+
+        // Remove any prior cover for this book, but keep the staged file if it
+        // happens to already be the final name.
+        let coverPrefix = bookID.uuidString + "."
+        for url in try FileManager.default.contentsOfDirectory(at: coversDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        where url.lastPathComponent.hasPrefix(coverPrefix) && url.standardizedFileURL.path != stagedURL.standardizedFileURL.path {
+            try? FileManager.default.removeItem(at: url)
+        }
+
+        if stagedURL.standardizedFileURL.path != finalURL.standardizedFileURL.path {
+            _ = try? FileManager.default.replaceItemAt(finalURL, withItemAt: stagedURL)
+            if FileManager.default.fileExists(atPath: stagedURL.path) {
+                // replaceItemAt can leave the source when the destination did not
+                // exist; fall back to a move.
+                try? FileManager.default.moveItem(at: stagedURL, to: finalURL)
+            }
+        }
+        return finalURL.lastPathComponent
+    }
+
+    /// Removes a staged cover file left behind by a failed import.
+    nonisolated static func removeStagedCover(stagedFilename: String) {
+        guard let url = try? AppStorage.coversDirectory().appendingPathComponent(stagedFilename, isDirectory: false) else {
+            return
+        }
+        try? FileManager.default.removeItem(at: url)
     }
 
     nonisolated static func removeCachedCover(for bookID: UUID) throws {
@@ -1031,8 +1158,15 @@ final class MediaOverlayPreparationCoordinator {
         )
         store.persistNow()
 
-        tasks[bookID] = Task { @MainActor [weak self] in
-            defer { self?.tasks.removeValue(forKey: bookID) }
+        // Capture this task so the defer only clears the map entry when it still
+        // belongs to THIS task. Without the identity check, a cancel +
+        // re-enqueue could let this (now-cancelled) task's defer delete a newer
+        // task's entry, allowing a duplicate concurrent preparation.
+        var thisTask: Task<Void, Never>?
+        let task = Task { @MainActor [weak self] in
+            defer {
+                self?.clearTaskEntryIfCurrent(for: bookID, task: thisTask)
+            }
 
             guard let sourceURL = try? book.resolvedEPUBFileURL() else {
                 book.mediaOverlayPreparationState = .failed
@@ -1106,6 +1240,8 @@ final class MediaOverlayPreparationCoordinator {
                 store.persistNow()
             }
         }
+        thisTask = task
+        tasks[bookID] = task
     }
 
     /// Validates a book's clip-based positions against the freshly prepared clip
@@ -1137,6 +1273,18 @@ final class MediaOverlayPreparationCoordinator {
 
     func cancelPreparation(for bookID: UUID) {
         tasks[bookID]?.cancel()
+        tasks.removeValue(forKey: bookID)
+    }
+
+    /// Removes the map entry for `bookID` only when it still holds `task`. A
+    /// task that was cancelled and superseded by a re-enqueue must NOT clear the
+    /// newer task's entry (which would allow a duplicate concurrent
+    /// preparation), so a finished task clears the map only if it is still the
+    /// tracked one.
+    private func clearTaskEntryIfCurrent(for bookID: UUID, task: Task<Void, Never>?) {
+        guard let task, tasks[bookID] == task else {
+            return
+        }
         tasks.removeValue(forKey: bookID)
     }
 
@@ -1250,6 +1398,29 @@ final class MediaOverlayPreparationCoordinator {
 
 #if DEBUG
 extension MediaOverlayPreparationCoordinator {
+    /// Stores a no-op task under `bookID` and returns it, so tests can drive the
+    /// cancel + re-enqueue identity logic with real `Task` instances.
+    func test_trackDummyTask(for bookID: UUID) -> Task<Void, Never> {
+        let task = Task<Void, Never> {}
+        tasks[bookID] = task
+        return task
+    }
+
+    func test_isTracked(_ bookID: UUID) -> Bool {
+        tasks[bookID] != nil
+    }
+
+    /// Exposes the identity-guarded map cleanup used by a finished task's defer.
+    func test_clearTaskEntryIfCurrent(for bookID: UUID, task: Task<Void, Never>?) {
+        clearTaskEntryIfCurrent(for: bookID, task: task)
+    }
+
+    func test_reset() {
+        tasks.removeAll()
+        progressSnapshots.removeAll()
+        progressObservers.removeAll()
+    }
+
     /// Cancels and drains all in-flight preparation work. Used by tests that
     /// create transient EPUB libraries so background preparation cannot keep
     /// touching deleted files after the test has moved on to another suite.
