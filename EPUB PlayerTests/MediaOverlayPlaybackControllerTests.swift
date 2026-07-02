@@ -37,6 +37,37 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
         )
     }
 
+    private func makeTimedClip(
+        audioPath: String,
+        fragmentID: String,
+        clipBegin: Double,
+        clipEnd: Double
+    ) -> EPUBMediaOverlayClip {
+        EPUBMediaOverlayClip(
+            textHref: "chapter.xhtml#\(fragmentID)",
+            textResourceHref: "chapter.xhtml",
+            fragmentID: fragmentID,
+            audioHref: audioPath,
+            audioPath: audioPath,
+            clipBegin: clipBegin,
+            clipEnd: clipEnd
+        )
+    }
+
+    /// Four 5s clips sharing one audio file, yielding a contiguous timeline of
+    /// [0-5], [5-10], [10-15], [15-20]. Explicit clipEnds make the narrated
+    /// timeline deterministic without loading real audio.
+    private func makeContiguousTimedClips() -> [EPUBMediaOverlayClip] {
+        (0..<4).map { index in
+            makeTimedClip(
+                audioPath: "audio.mp3",
+                fragmentID: "c\(index)",
+                clipBegin: Double(index) * 5,
+                clipEnd: Double(index + 1) * 5
+            )
+        }
+    }
+
     /// A clip with an explicit `clipEnd` (the normal SMIL case) must still get
     /// an end-of-item observer registered. The boundary time observer is not
     /// guaranteed to fire when its boundary sits at the audio file's true end,
@@ -189,6 +220,56 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
             controller.state,
             .paused,
             "An interruption .began must move the controller out of the playing state so the button shows play"
+        )
+    }
+
+    /// Returning from background past the threshold while paused must rewind to
+    /// an earlier clip and report that it did so, so the reader can scroll the
+    /// newly-highlighted (possibly off-screen) sentence back into view.
+    func testAutoRewindAfterBackgroundReturnsTrueAndMovesToEarlierClip() async throws {
+        let clips = makeContiguousTimedClips()
+        let url = URL(fileURLWithPath: "/tmp/audio.mp3")
+
+        controller.configureForTesting(clips: clips) { _ in url }
+        // Paused selection: no player is loaded, so the offset within the clip
+        // is 0 and the current position is the clip's timeline start (15s).
+        controller.selectClip(at: 3, autoplay: false, reason: "test-autorewind")
+
+        let didRewind = await controller.applicationWillEnterForeground(
+            backgroundedFor: 120,
+            rewindThresholdMinutes: 1,
+            rewindSeconds: 10
+        )
+
+        XCTAssertTrue(didRewind, "A paused return past the threshold must report that it rewound")
+        // 15s - 10s = 5s, which lands at the start of clip index 1 ([5-10]).
+        XCTAssertEqual(
+            controller.currentClipIndex,
+            1,
+            "Auto-rewind of 10s from the 15s mark should move to the clip covering the 5s mark"
+        )
+    }
+
+    /// A return shorter than the configured threshold must not rewind and must
+    /// report that nothing happened, leaving the current clip untouched.
+    func testAutoRewindBelowThresholdReturnsFalseAndKeepsClip() async throws {
+        let clips = makeContiguousTimedClips()
+        let url = URL(fileURLWithPath: "/tmp/audio.mp3")
+
+        controller.configureForTesting(clips: clips) { _ in url }
+        controller.selectClip(at: 3, autoplay: false, reason: "test-autorewind-below")
+
+        let didRewind = await controller.applicationWillEnterForeground(
+            backgroundedFor: 30,
+            rewindThresholdMinutes: 1,
+            rewindSeconds: 10
+        )
+
+        XCTAssertFalse(didRewind, "A return shorter than the threshold must not rewind")
+        XCTAssertEqual(
+            controller.currentClipIndex,
+            3,
+            "A below-threshold return must leave the current clip unchanged"
         )
     }
 

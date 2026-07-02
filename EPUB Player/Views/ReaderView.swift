@@ -232,11 +232,20 @@ struct ReaderView: View {
                 let requiredMinutes = ReaderSettings.normalizedAutoRewindAfterBackgroundMinutes(
                     store.autoRewindAfterBackgroundMinutes
                 )
-                await playback.applicationWillEnterForeground(
+                let didRewind = await playback.applicationWillEnterForeground(
                     backgroundedFor: Date().timeIntervalSince(backgroundEnteredAt),
                     rewindThresholdMinutes: requiredMinutes,
                     rewindSeconds: 10
                 )
+                // Auto-rewind runs while paused, so the clip-change handler does
+                // not auto-scroll. Bring the rewound highlight back on screen if
+                // it ended up outside the visible area.
+                if didRewind, case .ready(_, let navigator) = state {
+                    await repositionCurrentClipIntoViewIfOffscreen(
+                        with: navigator,
+                        visibleBottomFraction: navigatorVisibleBottomFraction
+                    )
+                }
             }
         case .inactive:
             break
@@ -1544,6 +1553,67 @@ struct ReaderView: View {
 
           const targetTop = pinCurrentClipToPreferredTop ? preferredTop : Math.max(0, Math.min(currentRect.top, preferredTop));
           const delta = currentRect.top - targetTop;
+          if (Math.abs(delta) <= 2) {
+            return;
+          }
+
+          window.scrollBy({ top: delta, behavior: 'smooth' });
+        })();
+        """
+
+        _ = await navigator.evaluateJavaScript(script)
+    }
+
+    /// Scrolls the current clip to near the top only when it is currently
+    /// off screen. Used after a paused auto-rewind moves the highlight to an
+    /// earlier sentence that may have scrolled out of view; unlike
+    /// `repositionCurrentClipForPlaybackIfNeeded` it never scrolls ahead based
+    /// on the following text part.
+    @MainActor
+    private func repositionCurrentClipIntoViewIfOffscreen(
+        with navigator: EPUBNavigatorViewController,
+        visibleBottomFraction: CGFloat
+    ) async {
+        guard let currentClip = playback.currentClip,
+              let fragmentID = currentClip.fragmentID,
+              !fragmentID.isEmpty
+        else {
+            return
+        }
+
+        // Cross-resource rewinds need the target chapter rendered before the
+        // fragment can be measured; navigating also repaints the deferred
+        // highlight via handleLocationDidChange.
+        if !(await isCurrentClipResourceVisible(with: navigator, clip: currentClip)) {
+            await navigateToCurrentClip(with: navigator)
+        }
+
+        let fragmentIDLiteral = javaScriptStringLiteral(fragmentID)
+        let visibleBottomFractionLiteral = String(Double(min(max(visibleBottomFraction, 0), 1)))
+        let script = """
+        (() => {
+          const visibleBottomFraction = Math.min(Math.max(\(visibleBottomFractionLiteral), 0), 1);
+          const visibleBottom = window.innerHeight * visibleBottomFraction;
+          const visibleHeight = Math.max(visibleBottom, 1);
+          const preferredTop = visibleHeight * 0.05;
+
+          const startElement = document.getElementById(\(fragmentIDLiteral));
+          if (!startElement) {
+            return;
+          }
+
+          const startStyle = window.getComputedStyle(startElement);
+          if (startStyle.display === 'none' || startStyle.visibility === 'hidden') {
+            return;
+          }
+
+          const currentRect = startElement.getBoundingClientRect();
+          const isOffscreen = currentRect.top < 0 || currentRect.top >= visibleBottom;
+          if (!isOffscreen) {
+            return;
+          }
+
+          const delta = currentRect.top - preferredTop;
           if (Math.abs(delta) <= 2) {
             return;
           }

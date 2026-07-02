@@ -1170,19 +1170,23 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
     }
 
+    /// Returns `true` when an auto-rewind was performed, so the caller can bring
+    /// the newly-highlighted clip back into view.
+    @discardableResult
     func applicationWillEnterForeground(
         backgroundedFor duration: TimeInterval,
         rewindThresholdMinutes: Int,
         rewindSeconds: Double
-    ) async {
+    ) async -> Bool {
         guard duration >= TimeInterval(rewindThresholdMinutes * 60),
               currentClip != nil,
               !state.isPlaying
         else {
-            return
+            return false
         }
 
         await jump(by: -rewindSeconds, reason: "autoRewindAfterBackground")
+        return true
     }
 
     /// Schedules deactivation of the audio session after `audioSessionIdleTimeout`
