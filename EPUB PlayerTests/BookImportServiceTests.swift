@@ -114,6 +114,218 @@ final class BookImportServiceTests: XCTestCase {
         return url
     }
 
+    private func makeEPUBFileWithCover(named filename: String, title: String, coverBytes: [UInt8]) throws -> URL {
+        let opf = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>\(title)</dc:title>
+            <dc:creator>Test Author</dc:creator>
+            <dc:identifier id="uid">test-\(title)</dc:identifier>
+          </metadata>
+          <manifest>
+            <item id="cover" href="cover.png" media-type="image/png" properties="cover-image"/>
+            <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+          </manifest>
+          <spine>
+            <itemref idref="chapter1"/>
+          </spine>
+        </package>
+        """
+        let epub = ZIPFixtureBuilder.makeEPUB(entries: [
+            ZIPFixtureEntry(name: "OEBPS/content.opf", data: Data(opf.utf8)),
+            ZIPFixtureEntry(name: "OEBPS/chapter1.xhtml", data: Data("<html/>".utf8)),
+            ZIPFixtureEntry(name: "OEBPS/cover.png", data: Data(coverBytes))
+        ])
+        let url = tempDirectory.appendingPathComponent(filename, isDirectory: false)
+        try epub.write(to: url)
+        return url
+    }
+
+    private func makeEPUBFileWithMalformedOPF(named filename: String) throws -> URL {
+        // Valid mimetype + container so validateEPUB passes, but a truncated OPF
+        // that cannot be parsed into a manifest.
+        let malformedOPF = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+          <manifest>
+            <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+        """
+        let epub = ZIPFixtureBuilder.makeEPUB(entries: [
+            ZIPFixtureEntry(name: "OEBPS/content.opf", data: Data(malformedOPF.utf8)),
+            ZIPFixtureEntry(name: "OEBPS/chapter1.xhtml", data: Data("<html/>".utf8))
+        ])
+        let url = tempDirectory.appendingPathComponent(filename, isDirectory: false)
+        try epub.write(to: url)
+        return url
+    }
+
+    // MARK: - Malformed OPF must not prune positions on reimport (#6.4)
+
+    func testReimportWithUnparseableOPFPreservesBookmarks() async throws {
+        let firstURL = try makeEPUBFile(named: "bm.epub", title: "First")
+        let firstImport = try await BookImportService.importBook(from: firstURL, filename: "bm.epub", store: store)
+        let original = try XCTUnwrap(firstImport)
+        original.bookmarks = [Bookmark(textResourceHref: "chapter1.xhtml", fragmentID: "p1")]
+
+        // Reimport with content whose OPF cannot be parsed: we cannot know the
+        // manifest, so bookmarks must be preserved rather than pruned to empty.
+        let replacementURL = try makeEPUBFileWithMalformedOPF(named: "bm2.epub")
+        let replacedImport = try await BookImportService.importBook(
+            from: replacementURL,
+            filename: "bm.epub",
+            store: store,
+            existingBookStrategy: .overwrite
+        )
+
+        let overwritten = try XCTUnwrap(replacedImport)
+        XCTAssertEqual(
+            overwritten.bookmarks.count,
+            1,
+            "A reimport whose OPF failed to parse must not prune bookmarks against an empty manifest"
+        )
+    }
+
+    // MARK: - Staged-file leak (#11a)
+
+    func testRemoveStalePartialImportsReclaimsOrphanedStagingFiles() throws {
+        let booksDirectory = try AppStorage.booksDirectory()
+
+        // A dot-prefixed staging file orphaned by a crashed/cancelled import.
+        let orphan = booksDirectory.appendingPathComponent(
+            "\(BookImportService.stagedImportPrefix)\(UUID().uuidString)-book.epub",
+            isDirectory: false
+        )
+        try Data("partial".utf8).write(to: orphan)
+
+        // A real book file that must be left untouched.
+        let realBook = booksDirectory.appendingPathComponent("real.epub", isDirectory: false)
+        try Data("epub".utf8).write(to: realBook)
+
+        BookImportService.removeStalePartialImports()
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: orphan.path),
+            "Stale .import-* staging files must be reclaimed"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: realBook.path),
+            "Real EPUB files must not be swept"
+        )
+    }
+
+    func testRefreshSweepsOrphanedStagingFiles() async throws {
+        let booksDirectory = try AppStorage.booksDirectory()
+        let orphan = booksDirectory.appendingPathComponent(
+            "\(BookImportService.stagedImportPrefix)\(UUID().uuidString)-ghost.epub",
+            isDirectory: false
+        )
+        try Data("partial".utf8).write(to: orphan)
+
+        _ = try await BookImportService.refreshBooksFromDocuments(store: store)
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: orphan.path),
+            "A refresh must sweep orphaned staging files that the hidden-file-skipping scan cannot see"
+        )
+    }
+
+    func testCancelledImportLeavesNoStagedFiles() async throws {
+        // A cancellation can land at various points; whichever window it hits,
+        // no dot-prefixed staging file may survive in the library.
+        let sourceURL = try makeEPUBFile(named: "cancel-leak.epub", title: "Cancelled")
+        let store = self.store!
+
+        let task = Task { @MainActor in
+            try await BookImportService.importBook(from: sourceURL, filename: "cancel-leak.epub", store: store)
+        }
+        task.cancel()
+        _ = try? await task.value
+
+        let booksDirectory = try AppStorage.booksDirectory()
+        let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: booksDirectory.path)) ?? []
+        let stagedLeftovers = leftovers.filter { $0.hasPrefix(BookImportService.stagedImportPrefix) }
+        XCTAssertTrue(stagedLeftovers.isEmpty, "A cancelled import must not leak staged files: \(stagedLeftovers)")
+    }
+
+    // MARK: - Overwrite-safe cover staging (#11b)
+
+    func testStagedCoverDoesNotTouchExistingCoverUntilCommit() throws {
+        let bookID = UUID()
+        let existing = try BookAssetCacheService.cacheCoverImage(
+            asset: EPUBArchiveAsset(path: "old.png", mediaType: "image/png", data: Data([1, 2, 3])),
+            for: bookID
+        )
+        let existingURL = try AppStorage.coversDirectory().appendingPathComponent(existing)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: existingURL.path))
+
+        // Staging a new cover must NOT remove or overwrite the existing one.
+        let staged = try BookAssetCacheService.cacheStagedCoverImage(
+            asset: EPUBArchiveAsset(path: "new.png", mediaType: "image/png", data: Data([4, 5, 6])),
+            for: bookID
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: existingURL.path), "Existing cover must survive staging")
+        XCTAssertNotEqual(staged, existing)
+
+        // Simulate a failed import: removing the staged cover leaves the original.
+        BookAssetCacheService.removeStagedCover(stagedFilename: staged)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: existingURL.path), "Failed import must not disturb the existing cover")
+        let stagedURL = try AppStorage.coversDirectory().appendingPathComponent(staged)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stagedURL.path), "Staged cover must be cleaned up on failure")
+    }
+
+    func testCommitStagedCoverReplacesPriorCover() throws {
+        let bookID = UUID()
+        let old = try BookAssetCacheService.cacheCoverImage(
+            asset: EPUBArchiveAsset(path: "old.png", mediaType: "image/png", data: Data([1, 2, 3])),
+            for: bookID
+        )
+        let staged = try BookAssetCacheService.cacheStagedCoverImage(
+            asset: EPUBArchiveAsset(path: "new.png", mediaType: "image/png", data: Data([9, 9, 9])),
+            for: bookID
+        )
+
+        let final = try BookAssetCacheService.commitStagedCover(stagedFilename: staged, for: bookID)
+        let finalURL = try AppStorage.coversDirectory().appendingPathComponent(final)
+
+        XCTAssertEqual(try Data(contentsOf: finalURL), Data([9, 9, 9]), "Commit must promote the new cover bytes")
+        // Only one cover file for the book should remain (old + staged collapsed).
+        let coversDir = try AppStorage.coversDirectory()
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: coversDir.path)
+            .filter { $0.hasPrefix(bookID.uuidString) }
+        XCTAssertEqual(remaining, [final], "Commit must leave exactly the final cover; got \(remaining)")
+        XCTAssertNotEqual(old, staged)
+    }
+
+    func testOverwriteImportReplacesCoverAndLeavesNoStagedFiles() async throws {
+        let firstURL = try makeEPUBFileWithCover(named: "cover.epub", title: "First", coverBytes: [0x89, 0x50, 0x4E, 0x47, 1])
+        let firstImport = try await BookImportService.importBook(from: firstURL, filename: "cover.epub", store: store)
+        let first = try XCTUnwrap(firstImport)
+        let firstCover = try XCTUnwrap(first.coverImagePath)
+        let firstCoverURL = try XCTUnwrap(try first.resolvedCoverImageURL())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstCoverURL.path))
+
+        let replacementURL = try makeEPUBFileWithCover(named: "cover2.epub", title: "Second", coverBytes: [0x89, 0x50, 0x4E, 0x47, 2, 3])
+        let replacedImport = try await BookImportService.importBook(
+            from: replacementURL,
+            filename: "cover.epub",
+            store: store,
+            existingBookStrategy: .overwrite
+        )
+        let replaced = try XCTUnwrap(replacedImport)
+
+        XCTAssertEqual(replaced.id, first.id)
+        let newCoverURL = try XCTUnwrap(try replaced.resolvedCoverImageURL())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: newCoverURL.path), "Overwrite must leave a valid cover")
+
+        // No `.import-` staged cover files may linger after a successful commit.
+        let coversDir = try AppStorage.coversDirectory()
+        let staged = try FileManager.default.contentsOfDirectory(atPath: coversDir.path)
+            .filter { $0.contains(".import-") }
+        XCTAssertTrue(staged.isEmpty, "Committed import must not leave staged cover files: \(staged)")
+        XCTAssertNotNil(firstCover)
+    }
+
     func testImportValidEPUB() async throws {
         let sourceURL = try makeEPUBFile(named: "valid.epub", title: "A Real Book")
 

@@ -41,7 +41,10 @@ nonisolated private final class PlaybackResources: @unchecked Sendable {
     var player: AVPlayer?
     var boundaryObserver: Any?
     var endObserver: NSObjectProtocol?
+    var failureObserver: NSObjectProtocol?
+    var itemStatusObservation: NSKeyValueObservation?
     var interruptionObserver: NSObjectProtocol?
+    var routeChangeObserver: NSObjectProtocol?
     var periodicTimeObserver: Any?
     var playCommandTarget: Any?
     var pauseCommandTarget: Any?
@@ -84,10 +87,20 @@ nonisolated private final class PlaybackResources: @unchecked Sendable {
             NotificationCenter.default.removeObserver(endObserver)
         }
         endObserver = nil
+        if let failureObserver {
+            NotificationCenter.default.removeObserver(failureObserver)
+        }
+        failureObserver = nil
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
         if let interruptionObserver {
             NotificationCenter.default.removeObserver(interruptionObserver)
         }
         interruptionObserver = nil
+        if let routeChangeObserver {
+            NotificationCenter.default.removeObserver(routeChangeObserver)
+        }
+        routeChangeObserver = nil
         playCommandTarget = nil
         pauseCommandTarget = nil
         togglePlayPauseCommandTarget = nil
@@ -157,9 +170,21 @@ final class MediaOverlayPlaybackController: ObservableObject {
         get { resources.endObserver }
         set { resources.endObserver = newValue }
     }
+    private var failureObserver: NSObjectProtocol? {
+        get { resources.failureObserver }
+        set { resources.failureObserver = newValue }
+    }
+    private var itemStatusObservation: NSKeyValueObservation? {
+        get { resources.itemStatusObservation }
+        set { resources.itemStatusObservation = newValue }
+    }
     private var interruptionObserver: NSObjectProtocol? {
         get { resources.interruptionObserver }
         set { resources.interruptionObserver = newValue }
+    }
+    private var routeChangeObserver: NSObjectProtocol? {
+        get { resources.routeChangeObserver }
+        set { resources.routeChangeObserver = newValue }
     }
     private var periodicTimeObserver: Any? {
         get { resources.periodicTimeObserver }
@@ -197,6 +222,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
     private var jumpAvailabilityRefreshTask: Task<Void, Never>?
     private var didConfigureRemoteCommands = false
     private var didRegisterInterruptionObserver = false
+    private var didRegisterRouteChangeObserver = false
 
     /// Idle delay before deactivating the audio session after an ordinary pause.
     /// An ordinary pause keeps the session active so resume is instant; if the
@@ -859,7 +885,43 @@ final class MediaOverlayPlaybackController: ObservableObject {
                     self.nextClip(reason: "itemEndObserver transitionID=\(transitionID)")
                 }
             }
+
+            // A corrupt or unplayable audio file otherwise fails silently: the
+            // end observer never fires and state stays `.playing`. Observe both
+            // the explicit failure notification and the item's status so the
+            // controller surfaces `.failed` instead.
+            failureObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemFailedToPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] notification in
+                let message = (notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?
+                    .localizedDescription
+                Task { @MainActor [weak self] in
+                    self?.handleItemFailure(clip: clip, transitionID: transitionID, message: message)
+                }
+            }
+
+            itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
+                guard observedItem.status == .failed else {
+                    return
+                }
+                let message = observedItem.error?.localizedDescription
+                Task { @MainActor [weak self] in
+                    self?.handleItemFailure(clip: clip, transitionID: transitionID, message: message)
+                }
+            }
         }
+    }
+
+    private func handleItemFailure(clip: EPUBMediaOverlayClip, transitionID: Int, message: String?) {
+        guard currentTransitionID == transitionID, isCurrentClip(clip) else {
+            return
+        }
+        player?.pause()
+        state = .failed(message ?? "This audio could not be played.")
+        updateNowPlayingInfo(playbackRateOverride: 0)
+        scheduleRefreshJumpAvailability()
     }
 
     private func removeObservers(reason: String) {
@@ -872,6 +934,13 @@ final class MediaOverlayPlaybackController: ObservableObject {
             NotificationCenter.default.removeObserver(endObserver)
         }
         endObserver = nil
+
+        if let failureObserver {
+            NotificationCenter.default.removeObserver(failureObserver)
+        }
+        failureObserver = nil
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
     }
 
     private func continueCurrentItemForAutomaticAdvanceIfPossible(
@@ -1111,6 +1180,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
         try session.setCategory(.playback, mode: .default)
         try session.setActive(true)
         registerInterruptionObserverIfNeeded(for: session)
+        registerRouteChangeObserverIfNeeded(for: session)
     }
 
     /// Observes audio-session interruptions (e.g. an incoming phone call) so the
@@ -1146,6 +1216,47 @@ final class MediaOverlayPlaybackController: ObservableObject {
         // resumes. We deliberately do not auto-resume on `.ended`: the user taps
         // play to continue.
         guard type == .began, state.isPlaying else {
+            return
+        }
+
+        state = .paused
+        updateNowPlayingInfo(playbackRateOverride: 0)
+        scheduleRefreshJumpAvailability()
+    }
+
+    /// Observes audio route changes so unplugging headphones (or another
+    /// `.oldDeviceUnavailable` change) pauses playback and syncs published
+    /// state. iOS pauses the `AVPlayer` on such a change, but without this the
+    /// controller would keep reporting `.playing` — leaving silent audio, the
+    /// wrong button icon, and stale lock-screen info.
+    private func registerRouteChangeObserverIfNeeded(for session: AVAudioSession) {
+        guard !didRegisterRouteChangeObserver else {
+            return
+        }
+        didRegisterRouteChangeObserver = true
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleAudioSessionRouteChange(notification)
+            }
+        }
+    }
+
+    private func handleAudioSessionRouteChange(_ notification: Notification) {
+        guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
+        else {
+            return
+        }
+
+        // `.oldDeviceUnavailable` is the headphones-unplugged case: iOS has
+        // already paused the player. Sync to `.paused` so the icon repaints and
+        // a single tap resumes. We do not auto-resume — playback stays paused
+        // until the user taps play.
+        guard reason == .oldDeviceUnavailable, state.isPlaying else {
             return
         }
 
@@ -1273,6 +1384,17 @@ extension MediaOverlayPlaybackController {
     /// removal is completed before the test releases its last reference.
     func test_teardown() {
         stop(reason: "test_teardown")
+    }
+
+    /// Simulates the current item failing to play (a corrupt/unplayable audio
+    /// file). Drives the same code path the failure observers invoke so tests
+    /// can assert the controller surfaces `.failed` instead of staying stuck at
+    /// `.playing`, without depending on real AVFoundation decode timing.
+    func test_simulateCurrentItemFailure(message: String) {
+        guard let clip = currentClip, let transitionID = currentTransitionID else {
+            return
+        }
+        handleItemFailure(clip: clip, transitionID: transitionID, message: message)
     }
 }
 #endif

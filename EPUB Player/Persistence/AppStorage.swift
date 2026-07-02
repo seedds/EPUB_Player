@@ -7,6 +7,12 @@
 
 import Foundation
 
+enum AppStorageError: Error {
+    /// A stored relative path escaped (or tried to escape) its intended base
+    /// directory — e.g. via `..` components in an attacker-edited state.json.
+    case pathEscapesBaseDirectory(storedPath: String)
+}
+
 enum AppStorage {
     nonisolated static func documentsDirectory() throws -> URL {
         #if DEBUG
@@ -86,16 +92,37 @@ enum AppStorage {
     }
 
     nonisolated static func bookFileURL(storedPath: String) throws -> URL {
+        try containedFileURL(base: documentsDirectory(), storedPath: storedPath)
+    }
+
+    /// Joins a stored, potentially attacker-controlled relative path onto a
+    /// trusted base directory, rejecting any `.`/`..` traversal and verifying
+    /// the resolved URL stays inside `base`. `state.json` is user-editable via
+    /// the Files app, so stored paths must never be trusted to stay contained.
+    nonisolated static func containedFileURL(base: URL, storedPath: String) throws -> URL {
         let pathComponents = storedPath.split(separator: "/").map(String.init)
         guard !pathComponents.isEmpty else {
-            return try documentsDirectory()
+            return base
         }
 
-        var fileURL = try documentsDirectory()
+        for component in pathComponents where component == "." || component == ".." {
+            throw AppStorageError.pathEscapesBaseDirectory(storedPath: storedPath)
+        }
+
+        var fileURL = base
         for component in pathComponents.dropLast() {
             fileURL.appendPathComponent(component, isDirectory: true)
         }
         fileURL.appendPathComponent(pathComponents[pathComponents.count - 1], isDirectory: false)
+
+        // Defense in depth: even with component filtering, confirm the resolved
+        // path is contained by the base (guards symlink/normalization surprises).
+        let resolvedBase = base.standardizedFileURL.path
+        let resolved = fileURL.standardizedFileURL.path
+        guard resolved == resolvedBase || resolved.hasPrefix(resolvedBase + "/") else {
+            throw AppStorageError.pathEscapesBaseDirectory(storedPath: storedPath)
+        }
+
         return fileURL
     }
 

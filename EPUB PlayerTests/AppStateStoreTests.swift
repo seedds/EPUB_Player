@@ -152,16 +152,23 @@ final class AppStateStoreTests: XCTestCase {
     }
 
     func testDebouncedSave() async throws {
-        // Change multiple properties rapidly
+        // A burst of synchronous mutations must coalesce into a single disk
+        // write. Before the CancellationError-guard fix, every cancelled save
+        // task still wrote, producing one write per mutation.
         store.fontSize = 16
         store.fontSize = 18
         store.fontSize = 20
+        store.lineHeight = 1.4
+        store.playbackSpeed = 1.25
 
-        // Wait for debounce period (150ms + buffer)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        // Wait past the 150ms debounce window (plus buffer).
+        try await Task.sleep(nanoseconds: 400_000_000)
 
-        // Verify save was called (would need to mock file system to verify)
-        // This is a placeholder for actual persistence testing
+        XCTAssertEqual(
+            store.test_diskWriteCount,
+            1,
+            "A burst of mutations should debounce into exactly one disk write"
+        )
     }
 
     func testPersistNow() async throws {
@@ -174,8 +181,15 @@ final class AppStateStoreTests: XCTestCase {
         store.addBook(book)
         store.persistNow()
 
-        // Verify immediate save (would need to check file system)
-        // This is a placeholder for actual persistence testing
+        // The state file must exist on disk and decode with the added book.
+        let stateURL = try AppStorage.stateURL()
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: stateURL.path),
+            "persistNow must flush state to disk immediately"
+        )
+
+        let reloaded = AppStateStore()
+        XCTAssertEqual(reloaded.books.map(\.title), ["Test Book"])
     }
 
     func testStateSurvivesMissingKeys() async throws {

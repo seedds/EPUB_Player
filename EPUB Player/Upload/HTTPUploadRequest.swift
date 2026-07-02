@@ -20,15 +20,25 @@ struct HTTPUploadRequest {
             return nil
         }
 
+        // Require a well-formed request line: METHOD SP request-target SP
+        // HTTP-version. A lenient (>= 2 tokens) parse accepted malformed lines.
         let requestParts = requestLine.split(separator: " ", maxSplits: 2).map(String.init)
-        guard requestParts.count >= 2 else {
+        guard requestParts.count == 3,
+              !requestParts[0].isEmpty,
+              !requestParts[1].isEmpty,
+              requestParts[2].uppercased().hasPrefix("HTTP/")
+        else {
+            return nil
+        }
+
+        guard let headers = parseHeaders(lines.dropFirst()) else {
             return nil
         }
 
         return HTTPUploadRequest(
             method: requestParts[0].uppercased(),
             target: requestParts[1],
-            headers: parseHeaders(lines.dropFirst())
+            headers: headers
         )
     }
 
@@ -77,12 +87,18 @@ struct HTTPUploadRequest {
         return UUID(uuidString: pathParts[2])
     }
 
-    private static func parseHeaders(_ lines: ArraySlice<String>) -> [String: String] {
+    /// Returns nil for a request that must be rejected — currently a duplicate
+    /// `Content-Length` (RFC 7230 request-smuggling hardening). A later
+    /// duplicate would otherwise silently overwrite the first.
+    private static func parseHeaders(_ lines: ArraySlice<String>) -> [String: String]? {
         var headers: [String: String] = [:]
         for line in lines {
             guard let colonIndex = line.firstIndex(of: ":") else { continue }
             let name = line[..<colonIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let value = line[line.index(after: colonIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if name == "content-length", headers[name] != nil {
+                return nil
+            }
             headers[name] = value
         }
         return headers

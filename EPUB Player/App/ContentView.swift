@@ -1020,9 +1020,15 @@ private struct ThemeSelectionView: View {
                         isSelected: option.rawValue == selectedThemeRawValue
                     ) {
                         selectedThemeRawValue = option.rawValue
+                        // For `.system`, resolve against the DEVICE scheme, not
+                        // the environment's — the latter reflects the outgoing
+                        // theme's forced scheme (e.g. Light on a dark device),
+                        // which would pick a white background right before the
+                        // app flips to dark.
+                        let effectiveScheme = option == .system ? Self.deviceColorScheme : colorScheme
                         store.readingBackgroundRawValue = ReaderSettings.defaultBackground(
                             forTheme: option,
-                            colorScheme: colorScheme
+                            colorScheme: effectiveScheme
                         ).rawValue
                     }
                 }
@@ -1030,6 +1036,20 @@ private struct ThemeSelectionView: View {
         }
         .navigationTitle("Theme")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// The device's actual light/dark setting, independent of any per-view
+    /// `preferredColorScheme` override the active theme applies. Reads the
+    /// window scene's trait collection (the app-level override is applied at the
+    /// SwiftUI view level, not the scene, so the scene still reflects the
+    /// system setting).
+    private static var deviceColorScheme: ColorScheme {
+        let style = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?
+            .traitCollection
+            .userInterfaceStyle
+        return style == .dark ? .dark : .light
     }
 }
 
