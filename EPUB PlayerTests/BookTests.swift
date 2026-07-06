@@ -20,6 +20,32 @@ final class BookTests: XCTestCase {
         XCTAssertEqual(book.history.first?.id, newer.id)
     }
 
+    func testRecordHistoryDropsPriorMatchingSameReasonBreadcrumb() {
+        let book = makeBook()
+        let origin = HistoryEntry(reason: "Jumped from", resourceHref: "chapter.xhtml", chapterProgress: 0.4)
+        let destination = HistoryEntry(reason: "Played", resourceHref: "other.xhtml", chapterProgress: 0.9)
+        let originAgain = HistoryEntry(reason: "Jumped from", resourceHref: "chapter.xhtml", chapterProgress: 0.4)
+
+        book.recordHistory(origin, isSamePosition: sameHistoryPosition, dropPriorMatchingSameReason: true)
+        book.recordHistory(destination, isSamePosition: sameHistoryPosition)
+        book.recordHistory(originAgain, isSamePosition: sameHistoryPosition, dropPriorMatchingSameReason: true)
+
+        // The earlier "Jumped from" for the same origin is removed even though a
+        // "Played" entry sits between them; the newest breadcrumb remains.
+        XCTAssertEqual(book.history.map(\.id), [originAgain.id, destination.id])
+    }
+
+    func testRecordHistoryKeepsBreadcrumbsForDifferentOrigins() {
+        let book = makeBook()
+        let first = HistoryEntry(reason: "Jumped from", resourceHref: "chapter.xhtml", chapterProgress: 0.4)
+        let second = HistoryEntry(reason: "Jumped from", resourceHref: "chapter.xhtml", chapterProgress: 0.8)
+
+        book.recordHistory(first, isSamePosition: sameHistoryPosition, dropPriorMatchingSameReason: true)
+        book.recordHistory(second, isSamePosition: sameHistoryPosition, dropPriorMatchingSameReason: true)
+
+        XCTAssertEqual(book.history.map(\.id), [second.id, first.id])
+    }
+
     func testRecordHistoryCapsEntriesFromTheEnd() {
         let book = makeBook()
 

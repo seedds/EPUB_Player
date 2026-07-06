@@ -870,7 +870,7 @@ struct ReaderView: View {
 
         let snapshot = currentPositionSnapshot(for: locator)
         Task { @MainActor in
-            let clipText = await readCurrentClipText(with: navigator)
+            let clipText = await readClipText(for: snapshot.clip, with: navigator)
             book.addBookmark(
                 Bookmark(
                     chapterTitle: snapshot.chapterTitle,
@@ -893,14 +893,16 @@ struct ReaderView: View {
 
     /// Snapshot of the current reading position shared by bookmark and history
     /// recording. Captures the locator and, when a clip is active, its identity
-    /// and per-resource ordinal. `clipText` is filled separately because reading
-    /// it from the page is asynchronous.
+    /// and per-resource ordinal. The active `clip` is captured here so the
+    /// asynchronous clip-text read reflects this exact position rather than
+    /// whatever clip becomes current later (e.g. after a jump).
     private struct PositionSnapshot {
         var chapterTitle: String?
         var locatorJSON: String?
         var resourceHref: String?
         var chapterProgress: Double?
         var totalProgress: Double?
+        var clip: EPUBMediaOverlayClip?
         var textResourceHref: String?
         var fragmentID: String?
         var clipBegin: Double?
@@ -926,6 +928,7 @@ struct ReaderView: View {
         if let clipIndex = playback.currentClipIndex,
            playback.clips.indices.contains(clipIndex) {
             let clip = playback.clips[clipIndex]
+            snapshot.clip = clip
             snapshot.textResourceHref = clip.textResourceHref
             snapshot.fragmentID = clip.fragmentID
             snapshot.clipBegin = clip.clipBegin
@@ -950,9 +953,17 @@ struct ReaderView: View {
             return
         }
 
+        // A "jumped from" breadcrumb is only meaningful when there is a settled
+        // clip to return to. During transient moments (e.g. a chapter-boundary
+        // auto-advance) the index can momentarily be unset, which would record a
+        // misleading position; skip those.
+        if reason == .jumpedFrom, playback.currentClipIndex == nil {
+            return
+        }
+
         let snapshot = currentPositionSnapshot(for: locator)
         Task { @MainActor in
-            let clipText = await readCurrentClipText(with: navigator)
+            let clipText = await readClipText(for: snapshot.clip, with: navigator)
             let entry = HistoryEntry(
                 reason: reason.label,
                 chapterTitle: snapshot.chapterTitle,
@@ -969,7 +980,11 @@ struct ReaderView: View {
                 clipCountInChapter: snapshot.clipCountInChapter
             )
 
-            book.recordHistory(entry, isSamePosition: isSameHistoryPosition)
+            book.recordHistory(
+                entry,
+                isSamePosition: isSameHistoryPosition,
+                dropPriorMatchingSameReason: reason == .jumpedFrom
+            )
             store.persistNow()
         }
     }
@@ -987,8 +1002,8 @@ struct ReaderView: View {
     }
 
     @MainActor
-    private func readCurrentClipText(with navigator: EPUBNavigatorViewController) async -> String? {
-        guard let clip = playback.currentClip,
+    private func readClipText(for clip: EPUBMediaOverlayClip?, with navigator: EPUBNavigatorViewController) async -> String? {
+        guard let clip,
               let fragmentID = clip.fragmentID,
               !fragmentID.isEmpty
         else {
@@ -1018,6 +1033,7 @@ struct ReaderView: View {
 
     @MainActor
     private func goToBookmark(_ bookmark: Bookmark, navigator: EPUBNavigatorViewController) async {
+        recordHistory(reason: .jumpedFrom)
         await navigateToSavedPosition(
             textResourceHref: bookmark.textResourceHref,
             fragmentID: bookmark.fragmentID,
@@ -1026,11 +1042,11 @@ struct ReaderView: View {
             locatorJSON: bookmark.locatorJSON,
             navigator: navigator
         )
-        recordHistory(reason: .jumped)
     }
 
     @MainActor
     private func goToHistoryEntry(_ entry: HistoryEntry, navigator: EPUBNavigatorViewController) async {
+        recordHistory(reason: .jumpedFrom)
         await navigateToSavedPosition(
             textResourceHref: entry.textResourceHref,
             fragmentID: entry.fragmentID,
@@ -1039,7 +1055,6 @@ struct ReaderView: View {
             locatorJSON: entry.locatorJSON,
             navigator: navigator
         )
-        recordHistory(reason: .jumped)
     }
 
     @MainActor
@@ -1094,6 +1109,7 @@ struct ReaderView: View {
 
     @MainActor
     private func selectChapter(_ item: ChapterListItem, navigator: EPUBNavigatorViewController) async {
+        recordHistory(reason: .jumpedFrom)
         let wasPlaying = playback.state.isPlaying
         if let clipIndex = firstClipIndex(for: item.link) {
             let clip = playback.clips[clipIndex]
@@ -1101,7 +1117,6 @@ struct ReaderView: View {
             _ = await navigator.go(to: item.link, options: .animated)
             playback.selectClip(at: clipIndex, autoplay: wasPlaying, reason: "chapterSelect")
             applyCurrentClipDecoration(with: navigator)
-            recordHistory(reason: .jumped)
             return
         }
 
@@ -1112,12 +1127,10 @@ struct ReaderView: View {
         _ = await navigator.go(to: item.link, options: .animated)
 
         guard wasPlaying else {
-            recordHistory(reason: .jumped)
             return
         }
 
         await startPlaybackFromVisibleOrForwardPosition(with: navigator)
-        recordHistory(reason: .jumped)
     }
 
     @MainActor
@@ -1186,9 +1199,9 @@ struct ReaderView: View {
             return
         }
 
+        recordHistory(reason: .jumpedFrom)
         playback.selectClip(at: clipIndex, autoplay: true, reason: "audioTap")
         applyCurrentClipDecoration(with: navigator)
-        recordHistory(reason: .jumped)
     }
 
     @MainActor
@@ -2049,7 +2062,7 @@ private enum ChapterBookmarkTab: Hashable {
 private enum HistoryEventReason {
     case played
     case paused
-    case jumped
+    case jumpedFrom
 
     var label: String {
         switch self {
@@ -2057,8 +2070,8 @@ private enum HistoryEventReason {
             return "Played"
         case .paused:
             return "Paused"
-        case .jumped:
-            return "Jumped"
+        case .jumpedFrom:
+            return "Jumped from"
         }
     }
 }
