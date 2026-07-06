@@ -1217,9 +1217,10 @@ struct ReaderView: View {
             return clipIndex
         }
 
-        // A tap inside a narrated resource should never be silently dropped:
-        // fall back to that resource's first clip when no fragment resolves.
-        return firstClipIndex(forResourceHref: resourceHref)
+        // A tap that doesn't land on (or near) a narrated word is intentionally
+        // ignored rather than snapping to the resource's first clip, which used
+        // to yank the reader to the chapter start on off-target taps.
+        return nil
     }
 
     @MainActor
@@ -1252,6 +1253,7 @@ struct ReaderView: View {
           var containingScore = Infinity; // distance from tap to containing line's center
           var nearest = null;
           var nearestDistance = Infinity;
+          var nearestLineHeight = 0; // line height of the nearest fragment's closest line
 
           for (const fragmentID of fragmentIDs) {
             const element = document.getElementById(fragmentID);
@@ -1271,10 +1273,12 @@ struct ReaderView: View {
             }
 
             var minDistance = Infinity;
+            var minDistanceLineHeight = 0;
             for (const r of lineRects) {
               const distance = pointRectDistance(r);
               if (distance < minDistance) {
                 minDistance = distance;
+                minDistanceLineHeight = r.height;
               }
               if (y >= r.top && y <= r.bottom && x >= r.left && x <= r.right) {
                 // Disambiguate overlapping containers by preferring the line
@@ -1293,10 +1297,17 @@ struct ReaderView: View {
             if (minDistance < nearestDistance) {
               nearestDistance = minDistance;
               nearest = fragmentID;
+              nearestLineHeight = minDistanceLineHeight;
             }
           }
 
-          const resolved = containing ?? nearest;
+          // A tap inside a word's line rect always resolves. Otherwise only
+          // accept the nearest word when the tap is within about one line
+          // height of it, so taps in blank margins/gaps (e.g. the whitespace
+          // around a chapter heading) resolve to nothing instead of snapping
+          // to the closest — often the chapter's first — clip.
+          const nearestPad = nearestLineHeight > 0 ? nearestLineHeight : 24;
+          const resolved = containing ?? (nearestDistance <= nearestPad ? nearest : null);
           return JSON.stringify({ fragmentID: resolved });
         })();
         """
