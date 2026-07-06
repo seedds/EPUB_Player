@@ -350,10 +350,19 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
     func recordHistory(
         _ entry: HistoryEntry,
         limit: Int = Book.defaultHistoryEntryLimit,
-        isSamePosition: (HistoryEntry, HistoryEntry) -> Bool
+        isSamePosition: (HistoryEntry, HistoryEntry) -> Bool,
+        dropPriorMatchingSameReason: Bool = false
     ) {
         if let newest = history.first, isSamePosition(newest, entry) {
             history.removeFirst()
+        }
+
+        // Collapse repeated breadcrumbs for the same origin: when requested,
+        // drop any earlier entry sharing this entry's reason and position so
+        // only the most recent one remains (the newest-match above only covers
+        // index 0, which interleaved entries can defeat).
+        if dropPriorMatchingSameReason, let reason = entry.reason {
+            history.removeAll { $0.reason == reason && isSamePosition($0, entry) }
         }
 
         history.insert(entry, at: 0)
