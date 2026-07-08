@@ -783,6 +783,7 @@ struct ReaderView: View {
     private func handleLocationDidChange(_ locator: Locator, navigator: EPUBNavigatorViewController) {
         currentLocationReference = normalizedReference(for: locator.href.string)
         currentChapterProgress = locator.locations.progression
+        DebugLog.shared.log("[highlight] handleLocationDidChange currentLocation=\(currentLocationReference?.resourceHref ?? "nil") pending=\(String(describing: pendingDecorationClipKey))")
         applyDeferredCurrentClipDecorationIfNeeded(with: navigator)
         guard !isSuppressingLocationPersistence else {
             return
@@ -1196,9 +1197,11 @@ struct ReaderView: View {
             point: point,
             navigator: navigator
         ) else {
+            DebugLog.shared.log("[highlight] playFromTappedPoint tapped=\(normalizedResource) resolvedClip=nil (ignored)")
             return
         }
 
+        DebugLog.shared.log("[highlight] playFromTappedPoint tapped=\(normalizedResource) resolvedClip=\(clipIndex) key=\(playback.clips[clipIndex].identityKey)")
         recordHistory(reason: .jumpedFrom)
         playback.selectClip(at: clipIndex, autoplay: true, reason: "audioTap")
         applyCurrentClipDecoration(with: navigator)
@@ -1441,6 +1444,11 @@ struct ReaderView: View {
 
     @MainActor
     private func handleCurrentClipChange(oldIndex: Int?, newIndex: Int?, navigator: EPUBNavigatorViewController) {
+        let logOldClipKey = oldIndex.flatMap { playback.clips.indices.contains($0) ? playback.clips[$0].identityKey : nil }
+        let logNewClipKey = newIndex.flatMap { playback.clips.indices.contains($0) ? playback.clips[$0].identityKey : nil }
+        let logOldResource = oldIndex.flatMap { playback.clips.indices.contains($0) ? normalizedResourceHref(for: playback.clips[$0].textResourceHref) : nil }
+        let logNewResource = newIndex.flatMap { playback.clips.indices.contains($0) ? normalizedResourceHref(for: playback.clips[$0].textResourceHref) : nil }
+        DebugLog.shared.log("[highlight] handleCurrentClipChange \(String(describing: oldIndex)) -> \(String(describing: newIndex)) | oldRes=\(String(describing: logOldResource)) newRes=\(String(describing: logNewResource)) | currentLocation=\(String(describing: currentLocationReference?.resourceHref)) | oldKey=\(String(describing: logOldClipKey)) newKey=\(String(describing: logNewClipKey))")
         applyCurrentClipDecoration(with: navigator)
         persistLastPlayedClip()
 
@@ -1958,6 +1966,7 @@ struct ReaderView: View {
         guard let clip = playback.currentClip,
               let href = RelativeURL(epubHREF: clip.textResourceHref)
         else {
+            DebugLog.shared.log("[highlight] applyCurrentClipDecoration branch=cleared-no-clip")
             pendingDecorationClipKey = nil
             navigator.apply(decorations: [], in: mediaOverlayDecorationGroup)
             return
@@ -1966,11 +1975,13 @@ struct ReaderView: View {
         let clipKey = playbackStartClipKey(for: clip)
         let clipResourceHref = normalizedResourceHref(for: clip.textResourceHref)
         guard currentLocationReference?.resourceHref == clipResourceHref else {
+            DebugLog.shared.log("[highlight] applyCurrentClipDecoration branch=DEFERRED (resource mismatch: clipRes=\(clipResourceHref) currentLocation=\(String(describing: currentLocationReference?.resourceHref))) clip=\(clipKey)")
             pendingDecorationClipKey = clipKey
             navigator.apply(decorations: [], in: mediaOverlayDecorationGroup)
             return
         }
 
+        DebugLog.shared.log("[highlight] applyCurrentClipDecoration branch=APPLIED res=\(clipResourceHref) fragment=\(String(describing: clip.fragmentID)) clip=\(clipKey)")
         pendingDecorationClipKey = nil
 
         let locator = Locator(
@@ -2003,9 +2014,11 @@ struct ReaderView: View {
               playbackStartClipKey(for: currentClip) == pendingDecorationClipKey,
               currentLocationReference?.resourceHref == normalizedResourceHref(for: currentClip.textResourceHref)
         else {
+            DebugLog.shared.log("[highlight] applyDeferredCurrentClipDecorationIfNeeded SKIP pending=\(String(describing: pendingDecorationClipKey)) currentClip=\(String(describing: playback.currentClip?.identityKey)) currentLocation=\(String(describing: currentLocationReference?.resourceHref))")
             return
         }
 
+        DebugLog.shared.log("[highlight] applyDeferredCurrentClipDecorationIfNeeded FIRE pending=\(pendingDecorationClipKey) currentLocation=\(String(describing: currentLocationReference?.resourceHref))")
         applyCurrentClipDecoration(with: navigator)
     }
 }

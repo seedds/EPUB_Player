@@ -401,6 +401,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
 
         let nextClip = clips[nextIndex]
+        DebugLog.shared.log("[highlight] nextClip reason=\(reason) \(currentClipIndex) -> \(nextIndex) target=\(nextClip.identityKey)")
         if continueCurrentItemForAutomaticAdvanceIfPossible(
             from: currentClip,
             to: nextClip,
@@ -422,6 +423,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
         guard clips.indices.contains(index) else {
             return
         }
+        DebugLog.shared.log("[highlight] selectClip reason=\(reason) \(String(describing: currentClipIndex)) -> \(index) autoplay=\(autoplay) target=\(clips[index].identityKey)")
         player?.pause()
         removeObservers(reason: "selectClip[\(reason)]")
         deactivateAudioSession(reason: "selectClip[\(reason)]")
@@ -969,6 +971,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
             return false
         }
 
+        DebugLog.shared.log("[highlight] continueSameAudioWithoutSeek reason=\(reason) \(fromIndex) -> \(toIndex) target=\(nextClip.identityKey)")
         removeObservers(reason: "continueSameAudioWithoutSeek[\(reason)]")
         currentClipIndex = toIndex
 
