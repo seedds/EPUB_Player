@@ -407,7 +407,7 @@ nonisolated private final class SMILParser: NSObject, XMLParserDelegate {
     }
 
     nonisolated func parse() -> [EPUBMediaOverlayClip] {
-        let parser = XMLParser(data: smilData)
+        let parser = makeHardenedXMLParser(data: smilData)
         parser.delegate = self
         parser.parse()
         return clips

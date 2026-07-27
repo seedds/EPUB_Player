@@ -207,6 +207,14 @@ enum EPUBMetadataService {
         let cleaned = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned?.isEmpty == false ? cleaned : nil
     }
+
+    #if DEBUG
+    /// Test-only access to container.xml parsing, so the XML hardening can be
+    /// exercised without building a full archive around the document.
+    nonisolated static func test_parseContainerRootPath(data: Data) -> String? {
+        ContainerParser().parse(data: data)
+    }
+    #endif
 }
 
 nonisolated private final class ContainerParser: NSObject, XMLParserDelegate {
@@ -219,7 +227,7 @@ nonisolated private final class ContainerParser: NSObject, XMLParserDelegate {
     nonisolated func parse(data: Data) -> String? {
         // A malformed container.xml must surface as a parse failure, not a
         // silently-nil rootfile that looks like a valid-but-empty container.
-        guard parse(XMLParser(data: data)) else {
+        guard parse(makeHardenedXMLParser(data: data)) else {
             return nil
         }
         return fullPath
@@ -252,7 +260,7 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
         // A malformed OPF must fail rather than yield a partially-parsed
         // package: a truncated manifest would wrongly prune valid bookmarks on
         // reimport (they'd appear to reference missing resources).
-        guard parse(XMLParser(data: data)) else {
+        guard parse(makeHardenedXMLParser(data: data)) else {
             return nil
         }
         return package
@@ -362,4 +370,19 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
 // Shared by the OPF and SMIL parsers ("smil:par" -> "par").
 nonisolated func localName(_ elementName: String) -> String {
     elementName.split(separator: ":").last.map(String.init)?.lowercased() ?? elementName.lowercased()
+}
+
+/// Builds an `XMLParser` for untrusted EPUB content.
+///
+/// Every XML document the importer reads (container.xml, the OPF, SMIL
+/// overlays) comes from an EPUB, and EPUBs arrive over an unauthenticated LAN
+/// upload server. Foundation already refuses to resolve external entities by
+/// default; setting the policy explicitly makes that guarantee local to the
+/// code that depends on it rather than an inherited default, so a future
+/// change cannot silently opt into file disclosure. See `XMLHardeningTests`.
+nonisolated func makeHardenedXMLParser(data: Data) -> XMLParser {
+    let parser = XMLParser(data: data)
+    parser.externalEntityResolvingPolicy = .never
+    parser.shouldResolveExternalEntities = false
+    return parser
 }
