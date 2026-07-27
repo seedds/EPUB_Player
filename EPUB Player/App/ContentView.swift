@@ -778,9 +778,13 @@ private struct UploadView: View {
 
 private struct SettingsView: View {
     @EnvironmentObject private var store: AppStateStore
-    @StateObject private var debugLog = DebugLog.shared
     @State private var customFontFamilies: [CustomFontStore.ImportedFontFamily] = []
     @State private var didCopyLogs = false
+    // Read once on appearance rather than observed continuously: DebugLog
+    // publishes on every logged line, and playback logs several a second, so
+    // subscribing to it here re-rendered this whole Form for as long as the
+    // Settings tab had ever been visited, even while it was off-screen.
+    @State private var hasNoLogEntries = true
 
     var body: some View {
         NavigationStack {
@@ -892,7 +896,7 @@ private struct SettingsView: View {
 
                 Section("Diagnostics") {
                     Button {
-                        UIPasteboard.general.string = debugLog.exportText()
+                        UIPasteboard.general.string = DebugLog.shared.exportText()
                         didCopyLogs = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                             didCopyLogs = false
@@ -900,13 +904,16 @@ private struct SettingsView: View {
                     } label: {
                         Text(didCopyLogs ? "Copied!" : "Copy Logs to Clipboard")
                     }
-                    .disabled(debugLog.entries.isEmpty)
+                    .disabled(hasNoLogEntries)
                 }
 
             }
             .environment(\.defaultMinListRowHeight, 28)
             .navigationTitle("Settings")
-            .onAppear(perform: loadCustomFonts)
+            .onAppear {
+                loadCustomFonts()
+                hasNoLogEntries = DebugLog.shared.entries.isEmpty
+            }
         }
     }
 
