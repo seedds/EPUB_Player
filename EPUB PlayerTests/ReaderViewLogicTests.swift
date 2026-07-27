@@ -15,7 +15,8 @@ final class ReaderViewLogicTests: XCTestCase {
         XCTAssertFalse(
             ReaderView.shouldClearSavedClip(
                 hasRestoredPlaybackState: false,
-                isReloadingOverlays: false
+                isReloadingOverlays: false,
+                hasLoadedClips: true
             )
         )
     }
@@ -26,19 +27,21 @@ final class ReaderViewLogicTests: XCTestCase {
         XCTAssertFalse(
             ReaderView.shouldClearSavedClip(
                 hasRestoredPlaybackState: true,
-                isReloadingOverlays: true
+                isReloadingOverlays: true,
+                hasLoadedClips: true
             ),
             "A mid-session overlay reload must not clear the saved resume point"
         )
     }
 
     func testClearsOnGenuineUserStop() {
-        // Restored and not reloading: a nil clip is a genuine stop, so clearing
-        // the saved point is correct.
+        // Restored, not reloading, clips still loaded: a nil clip is a genuine
+        // stop, so clearing the saved point is correct.
         XCTAssertTrue(
             ReaderView.shouldClearSavedClip(
                 hasRestoredPlaybackState: true,
-                isReloadingOverlays: false
+                isReloadingOverlays: false,
+                hasLoadedClips: true
             )
         )
     }
@@ -47,7 +50,34 @@ final class ReaderViewLogicTests: XCTestCase {
         XCTAssertFalse(
             ReaderView.shouldClearSavedClip(
                 hasRestoredPlaybackState: false,
-                isReloadingOverlays: true
+                isReloadingOverlays: true,
+                hasLoadedClips: true
+            )
+        )
+    }
+
+    /// The load-bearing case. A reload tears the clips down and nils the index;
+    /// SwiftUI may deliver that change after the reload has already finished,
+    /// so the reload flag can be back to false by the time this runs. An empty
+    /// clip list still proves the clips were torn down rather than stopped,
+    /// because stopping playback leaves them in place.
+    func testDoesNotClearWhenClipsWereTornDownEvenAfterReloadFlagCleared() {
+        XCTAssertFalse(
+            ReaderView.shouldClearSavedClip(
+                hasRestoredPlaybackState: true,
+                isReloadingOverlays: false,
+                hasLoadedClips: false
+            ),
+            "A nil clip with no clips loaded is a teardown, not a user stop"
+        )
+    }
+
+    func testDoesNotClearWhenNoClipsAndReloading() {
+        XCTAssertFalse(
+            ReaderView.shouldClearSavedClip(
+                hasRestoredPlaybackState: true,
+                isReloadingOverlays: true,
+                hasLoadedClips: false
             )
         )
     }
