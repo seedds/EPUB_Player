@@ -13,17 +13,23 @@ struct ZIPFixtureEntry {
     let nameBytes: Data
     let data: Data
     let utf8Flag: Bool
+    /// Overrides the uncompressed size written into the headers. A real
+    /// compression bomb declares a huge size backed by a few bytes of data;
+    /// this reproduces that without needing a DEFLATE encoder.
+    let declaredUncompressedSize: UInt32?
 
-    init(name: String, data: Data) {
+    init(name: String, data: Data, declaredUncompressedSize: UInt32? = nil) {
         self.nameBytes = Data(name.utf8)
         self.data = data
         self.utf8Flag = true
+        self.declaredUncompressedSize = declaredUncompressedSize
     }
 
     init(nameBytes: Data, data: Data, utf8Flag: Bool) {
         self.nameBytes = nameBytes
         self.data = data
         self.utf8Flag = utf8Flag
+        self.declaredUncompressedSize = nil
     }
 }
 
@@ -36,6 +42,7 @@ enum ZIPFixtureBuilder {
             let localHeaderOffset = UInt32(archive.count)
             let crc = crc32(entry.data)
             let size = UInt32(entry.data.count)
+            let declaredSize = entry.declaredUncompressedSize ?? size
             let flags: UInt16 = entry.utf8Flag ? 0x0800 : 0
 
             // Local file header (stored, method 0)
@@ -47,7 +54,7 @@ enum ZIPFixtureBuilder {
             archive.appendUInt16(0x21)          // mod date
             archive.appendUInt32(crc)
             archive.appendUInt32(size)          // compressed size
-            archive.appendUInt32(size)          // uncompressed size
+            archive.appendUInt32(declaredSize)  // uncompressed size
             archive.appendUInt16(UInt16(entry.nameBytes.count))
             archive.appendUInt16(0)             // extra length
             archive.append(entry.nameBytes)
@@ -63,7 +70,7 @@ enum ZIPFixtureBuilder {
             centralDirectory.appendUInt16(0x21) // mod date
             centralDirectory.appendUInt32(crc)
             centralDirectory.appendUInt32(size)
-            centralDirectory.appendUInt32(size)
+            centralDirectory.appendUInt32(declaredSize)
             centralDirectory.appendUInt16(UInt16(entry.nameBytes.count))
             centralDirectory.appendUInt16(0)    // extra length
             centralDirectory.appendUInt16(0)    // comment length

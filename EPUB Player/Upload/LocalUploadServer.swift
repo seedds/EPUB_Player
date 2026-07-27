@@ -150,6 +150,14 @@ final class LocalUploadServer {
     }
 
     private func accept(_ connection: NWConnection) {
+        // Refuse rather than queue: an unauthenticated LAN client that opens
+        // sockets and never writes would otherwise pin memory and file handles
+        // until the app is killed.
+        guard connections.count < UploadRequestLimits.maxConcurrentConnections else {
+            connection.cancel()
+            return
+        }
+
         let uploadConnection = HTTPUploadConnection(connection: connection, authConfig: authConfig)
         let id = ObjectIdentifier(uploadConnection)
         connections[id] = uploadConnection
@@ -230,7 +238,20 @@ enum UploadRequestLimits {
     /// terminating blank line cannot grow it without bound.
     static let maxHeaderBytes = 64 * 1024
     /// Caps the declared upload body so a client cannot fill the device's disk.
-    static let maxBodyBytes: Int64 = 10 * 1024 * 1024 * 1024
+    static let maxBodyBytes: Int64 = 5 * 1024 * 1024 * 1024
+
+    /// Free space that must remain after an upload completes. Filling the
+    /// volume entirely would break the app's own state writes.
+    static let requiredFreeSpaceMargin: Int64 = 256 * 1024 * 1024
+
+    /// Ceiling on simultaneous connections. The server is unauthenticated on
+    /// the LAN, so without this a client can pin unbounded memory and file
+    /// handles by opening sockets it never writes to.
+    static let maxConcurrentConnections = 16
+
+    /// How long a connection may make no progress before being dropped, so a
+    /// slowloris client cannot hold a slot open indefinitely.
+    static let idleTimeoutSeconds: TimeInterval = 60
 
     /// True when an in-progress header buffer (still missing its terminating
     /// blank line) has grown past the allowed maximum.
@@ -241,6 +262,12 @@ enum UploadRequestLimits {
     /// True when a declared `Content-Length` exceeds the allowed maximum.
     static func isBodyTooLarge(contentLength: Int64) -> Bool {
         contentLength > maxBodyBytes
+    }
+
+    /// True when writing `contentLength` more bytes would leave the volume
+    /// with less than the required margin.
+    static func wouldExhaustDisk(contentLength: Int64, availableBytes: Int64) -> Bool {
+        contentLength > availableBytes - requiredFreeSpaceMargin
     }
 }
 
@@ -284,6 +311,8 @@ private final class HTTPUploadConnection {
     private var uploadStartedAt: Date?
     private var expectedBodyLength: Int64 = 0
     private var receivedBodyLength: Int64 = 0
+    private var idleTimer: DispatchSourceTimer?
+    private var queue: DispatchQueue?
 
     init(connection: NWConnection, authConfig: UploadServerAuthConfig) {
         self.connection = connection
@@ -291,6 +320,7 @@ private final class HTTPUploadConnection {
     }
 
     func start(queue: DispatchQueue) {
+        self.queue = queue
         connection.stateUpdateHandler = { [weak self] state in
             if case .failed(let error) = state {
                 self?.finishWithError(error.localizedDescription)
@@ -299,12 +329,29 @@ private final class HTTPUploadConnection {
             }
         }
         connection.start(queue: queue)
+        resetIdleTimeout()
         receiveHeader()
     }
 
     func cancel() {
         connection.cancel()
         cleanup()
+    }
+
+    /// Restarted on every byte received. A client that stops making progress —
+    /// deliberately, as in slowloris, or because the network dropped — is cut
+    /// loose instead of holding a connection slot forever.
+    private func resetIdleTimeout() {
+        guard let queue else { return }
+
+        idleTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + UploadRequestLimits.idleTimeoutSeconds)
+        timer.setEventHandler { [weak self] in
+            self?.finishWithError("Upload timed out")
+        }
+        timer.resume()
+        idleTimer = timer
     }
 
     private func receiveHeader() {
@@ -317,6 +364,7 @@ private final class HTTPUploadConnection {
             }
 
             if let data, !data.isEmpty {
+                resetIdleTimeout()
                 headerData.append(data)
                 if let range = headerData.range(of: Data("\r\n\r\n".utf8)) {
                     let header = headerData[..<range.lowerBound]
@@ -413,6 +461,12 @@ private final class HTTPUploadConnection {
             return
         }
 
+        if let availableBytes = Self.availableDiskBytes(),
+           UploadRequestLimits.wouldExhaustDisk(contentLength: contentLength, availableBytes: availableBytes) {
+            finishWithHTTP(status: 507, body: "Not enough free space on the device for this upload")
+            return
+        }
+
         guard let filename = request.uploadFilename, UploadFileKind(filename: filename) != nil else {
             finishWithHTTP(status: 415, body: "Only .epub, .ttf, and .otf uploads are supported")
             return
@@ -503,6 +557,7 @@ private final class HTTPUploadConnection {
 
             do {
                 if let data, !data.isEmpty {
+                    resetIdleTimeout()
                     try writeBody(data)
                 }
             } catch {
@@ -518,6 +573,20 @@ private final class HTTPUploadConnection {
                 receiveBody()
             }
         }
+    }
+
+    /// Free space on the volume holding the uploads directory, or nil when it
+    /// cannot be determined (in which case the upload proceeds — a failed
+    /// write is a better outcome than refusing every upload).
+    private static func availableDiskBytes() -> Int64? {
+        guard let uploadsDirectory = try? AppStorage.uploadsDirectory(),
+              let values = try? uploadsDirectory.resourceValues(
+                  forKeys: [.volumeAvailableCapacityForImportantUsageKey]
+              )
+        else {
+            return nil
+        }
+        return values.volumeAvailableCapacityForImportantUsage
     }
 
     private func beginUpload(filename: String, contentLength: Int64) throws {
@@ -619,6 +688,8 @@ private final class HTTPUploadConnection {
     }
 
     private func cleanup() {
+        idleTimer?.cancel()
+        idleTimer = nil
         try? uploadFileHandle?.close()
         uploadFileHandle = nil
         // A temp URL still set here means the upload never completed (the

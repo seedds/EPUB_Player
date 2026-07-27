@@ -110,6 +110,46 @@ final class LocalUploadServerTests: XCTestCase {
         XCTAssertTrue(UploadRequestLimits.isBodyTooLarge(contentLength: UploadRequestLimits.maxBodyBytes + 1))
     }
 
+    func testBodyLimitIsBoundedForADeviceSizedDisk() {
+        // A limit larger than any plausible device disk is not a limit.
+        XCTAssertLessThanOrEqual(
+            UploadRequestLimits.maxBodyBytes,
+            5 * 1024 * 1024 * 1024,
+            "Upload cap must stay within a plausible device disk size"
+        )
+    }
+
+    // MARK: - Disk exhaustion
+
+    func testUploadFittingComfortablyOnDiskIsAllowed() {
+        XCTAssertFalse(
+            UploadRequestLimits.wouldExhaustDisk(
+                contentLength: 100 * 1024 * 1024,
+                availableBytes: 8 * 1024 * 1024 * 1024
+            )
+        )
+    }
+
+    func testUploadThatWouldFillDiskIsRejected() {
+        // 900 MB free, 800 MB upload: fits numerically, but leaves less than
+        // the margin the app needs to keep writing its own state.
+        XCTAssertTrue(
+            UploadRequestLimits.wouldExhaustDisk(
+                contentLength: 800 * 1024 * 1024,
+                availableBytes: 900 * 1024 * 1024
+            )
+        )
+    }
+
+    func testUploadLargerThanFreeSpaceIsRejected() {
+        XCTAssertTrue(
+            UploadRequestLimits.wouldExhaustDisk(
+                contentLength: 4 * 1024 * 1024 * 1024,
+                availableBytes: 1024 * 1024 * 1024
+            )
+        )
+    }
+
     // MARK: - constantTimeEquals
 
     func testConstantTimeEqualsMatchesIdenticalStrings() {
