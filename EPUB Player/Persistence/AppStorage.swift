@@ -32,8 +32,28 @@ enum AppStorage {
         )
     }
 
+    private static let booksDirectoryName = "Books"
+
     nonisolated static func booksDirectory() throws -> URL {
-        try ensureDirectory(documentsDirectory().appendingPathComponent("Books", isDirectory: true))
+        try ensureDirectory(documentsDirectory().appendingPathComponent(booksDirectoryName, isDirectory: true))
+    }
+
+    /// Whether the library directory is present, *without* creating it.
+    ///
+    /// `booksDirectory()` creates the directory on demand, so callers that need
+    /// to distinguish "the library is empty" from "the library directory is
+    /// gone" must ask before touching it. Refresh depends on this: an empty
+    /// scan of a recreated directory would otherwise look like proof that the
+    /// user deleted every book.
+    nonisolated static func booksDirectoryExists() -> Bool {
+        guard let documentsDirectory = try? documentsDirectory() else {
+            return false
+        }
+
+        let libraryDirectory = documentsDirectory.appendingPathComponent(booksDirectoryName, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: libraryDirectory.path, isDirectory: &isDirectory)
+        return exists && isDirectory.boolValue
     }
 
     nonisolated static func cacheDirectory() throws -> URL {

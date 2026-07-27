@@ -214,6 +214,78 @@ final class BookImportServiceTests: XCTestCase {
         )
     }
 
+    // MARK: - Refresh must never silently destroy the library
+
+    /// The library directory going missing is not evidence that the user
+    /// deleted their books — `booksDirectory()` recreates it on demand, so a
+    /// data-protection eviction or a Files-app move produces an empty scan
+    /// that previously looked authoritative and wiped every record.
+    func testRefreshWithVanishedBooksDirectoryPreservesLibrary() async throws {
+        let first = try makeEPUBFile(named: "keeper-one.epub", title: "Keeper One")
+        let second = try makeEPUBFile(named: "keeper-two.epub", title: "Keeper Two")
+        _ = try await BookImportService.importBook(from: first, filename: "keeper-one.epub", store: store)
+        _ = try await BookImportService.importBook(from: second, filename: "keeper-two.epub", store: store)
+        XCTAssertEqual(store.books.count, 2)
+
+        // Remove the whole directory: the next booksDirectory() call recreates
+        // it empty, so the scan succeeds and returns nothing.
+        try FileManager.default.removeItem(at: try AppStorage.booksDirectory())
+
+        do {
+            _ = try await BookImportService.refreshBooksFromDocuments(store: store)
+            XCTFail("Refresh must refuse to wipe a non-empty library it cannot verify")
+        } catch let error as BookImportError {
+            guard case .libraryFilesUnavailable = error else {
+                return XCTFail("Wrong error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(
+            store.books.count,
+            2,
+            "Refresh destroyed the library when the books directory vanished"
+        )
+    }
+
+    /// The genuine case must still work: when the user really has deleted
+    /// their books, refresh should prune the stale records.
+    func testRefreshRemovesRecordsWhenFilesAreGenuinelyDeleted() async throws {
+        let url = try makeEPUBFile(named: "doomed.epub", title: "Doomed")
+        _ = try await BookImportService.importBook(from: url, filename: "doomed.epub", store: store)
+        XCTAssertEqual(store.books.count, 1)
+
+        // Delete the file but leave the directory in place — an ordinary
+        // user-initiated deletion.
+        let booksDirectory = try AppStorage.booksDirectory()
+        for file in try FileManager.default.contentsOfDirectory(at: booksDirectory, includingPropertiesForKeys: nil) {
+            try FileManager.default.removeItem(at: file)
+        }
+
+        _ = try await BookImportService.refreshBooksFromDocuments(store: store)
+
+        XCTAssertTrue(
+            store.books.isEmpty,
+            "Refresh must still prune records whose files the user really deleted"
+        )
+    }
+
+    /// A partial disappearance must not take the surviving books with it.
+    func testRefreshKeepsSurvivingBooksWhenSomeFilesAreDeleted() async throws {
+        let first = try makeEPUBFile(named: "survivor.epub", title: "Survivor")
+        let second = try makeEPUBFile(named: "casualty.epub", title: "Casualty")
+        _ = try await BookImportService.importBook(from: first, filename: "survivor.epub", store: store)
+        _ = try await BookImportService.importBook(from: second, filename: "casualty.epub", store: store)
+
+        let booksDirectory = try AppStorage.booksDirectory()
+        try FileManager.default.removeItem(
+            at: booksDirectory.appendingPathComponent("casualty.epub", isDirectory: false)
+        )
+
+        _ = try await BookImportService.refreshBooksFromDocuments(store: store)
+
+        XCTAssertEqual(store.books.map(\.title), ["Survivor"])
+    }
+
     func testRefreshSweepsOrphanedStagingFiles() async throws {
         let booksDirectory = try AppStorage.booksDirectory()
         let orphan = booksDirectory.appendingPathComponent(
