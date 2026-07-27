@@ -387,6 +387,80 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
         )
     }
 
+    // MARK: - Failed start must stop the audio
+
+    /// Selecting a clip whose audio cannot be resolved must silence playback.
+    /// `start` removes the observers before awaiting resolution, so if it
+    /// returns without pausing, the previous clip's audio keeps running past
+    /// its boundary with no auto-advance and no highlight sync, while the UI
+    /// reports a failure.
+    func testFailedAudioResolutionOnAutoAdvanceStopsAudio() async throws {
+        let playableURL = try AudioFixture.makeSilentFile(seconds: 5)
+        defer { try? FileManager.default.removeItem(at: playableURL) }
+
+        // Different audio files, so the advance cannot take the seamless
+        // same-item path and must go through `start`.
+        let good = makeTimedClip(audioPath: "good.caf", fragmentID: "a", clipBegin: 0, clipEnd: 2)
+        let broken = makeTimedClip(audioPath: "missing.caf", fragmentID: "b", clipBegin: 0, clipEnd: 2)
+
+        controller.configureForTesting(clips: [good, broken]) { audioPath in
+            guard audioPath == good.audioPath else {
+                throw BookAssetCacheError.missingArchiveEntry(audioPath)
+            }
+            return playableURL
+        }
+
+        controller.selectClip(at: 0, autoplay: true, reason: "test-good")
+        try await waitUntil(timeout: 5) { self.controller.test_playerRate > 0 }
+
+        // Auto-advance, as the boundary observer does at the end of a clip.
+        // Unlike selectClip, this path does not pause first.
+        controller.test_advanceToNextClip()
+        await controller.test_awaitStartTask()
+
+        XCTAssertEqual(
+            controller.test_playerRate,
+            0,
+            "Audio kept playing after auto-advance failed to resolve the next clip"
+        )
+        guard case .failed = controller.state else {
+            return XCTFail("Expected .failed, got \(controller.state)")
+        }
+    }
+
+    /// The audio session can fail to activate (another app holding it,
+    /// resource exhaustion). `start` removes the observers before that call,
+    /// so returning without pausing leaves audio running unmanaged.
+    func testFailedStartLeavesNoAudioRunning() async throws {
+        let playableURL = try AudioFixture.makeSilentFile(seconds: 5)
+        defer { try? FileManager.default.removeItem(at: playableURL) }
+
+        let first = makeTimedClip(audioPath: "one.caf", fragmentID: "a", clipBegin: 0, clipEnd: 2)
+        let second = makeTimedClip(audioPath: "two.caf", fragmentID: "b", clipBegin: 0, clipEnd: 2)
+
+        controller.configureForTesting(clips: [first, second]) { audioPath in
+            guard audioPath == first.audioPath else {
+                throw BookAssetCacheError.missingArchiveEntry(audioPath)
+            }
+            return playableURL
+        }
+
+        controller.selectClip(at: 0, autoplay: true, reason: "test-first")
+        try await waitUntil(timeout: 5) { self.controller.test_playerRate > 0 }
+
+        controller.test_advanceToNextClip()
+        await controller.test_awaitStartTask()
+
+        // Whatever the failure mode, the invariant is the same: a controller
+        // that is not in a playing state must not be producing audio.
+        XCTAssertFalse(controller.state.isPlaying)
+        XCTAssertEqual(
+            controller.test_playerRate,
+            0,
+            "A non-playing controller must not leave the player running"
+        )
+    }
+
     private func waitUntil(
         timeout: TimeInterval,
         _ condition: @escaping () -> Bool

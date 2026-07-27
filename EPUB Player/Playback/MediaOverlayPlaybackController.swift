@@ -492,6 +492,14 @@ final class MediaOverlayPlaybackController: ObservableObject {
     private func start(_ clip: EPUBMediaOverlayClip, reason: String, transitionID: Int) {
         removeObservers(reason: "start[\(reason)]")
 
+        // Silence the outgoing clip before doing anything that can fail or
+        // suspend. The observers are gone as of the line above, so any audio
+        // left running here plays on past its clip boundary with no
+        // auto-advance and no highlight tracking. `selectClip` pauses on the
+        // user's behalf, but the auto-advance path (`nextClip`) does not, and
+        // that is the common case during read-aloud.
+        player?.pause()
+
         do {
             try configureAudioSession()
         } catch {
@@ -554,6 +562,10 @@ final class MediaOverlayPlaybackController: ObservableObject {
                     return
                 }
 
+                // Reassert silence: this transition owns the player, and
+                // reporting `.failed` while audio continues is the worst of
+                // both outcomes.
+                self.player?.pause()
                 self.state = .failed(error.localizedDescription)
                 self.clearNowPlayingInfo()
                 self.scheduleRefreshJumpAvailability()
@@ -1383,10 +1395,26 @@ extension MediaOverlayPlaybackController {
     /// Used to verify a superseded start stops its audio-resolution work.
     var test_isStartTaskCancelled: Bool { startTask?.isCancelled ?? false }
 
+    /// The player's current rate. Non-zero means audio is actually running,
+    /// regardless of what `state` reports.
+    var test_playerRate: Float { player?.rate ?? 0 }
+
+    /// Awaits the in-flight start transition so tests can assert on its
+    /// outcome without polling.
+    func test_awaitStartTask() async {
+        await startTask?.value
+    }
+
     /// Synchronously tears the controller down for tests so AVPlayer observer
     /// removal is completed before the test releases its last reference.
     func test_teardown() {
         stop(reason: "test_teardown")
+    }
+
+    /// Drives the auto-advance path the boundary observer uses, so tests can
+    /// exercise it without waiting on real audio playback timing.
+    func test_advanceToNextClip(reason: String = "boundaryObserver test") {
+        nextClip(reason: reason)
     }
 
     /// Simulates the current item failing to play (a corrupt/unplayable audio
