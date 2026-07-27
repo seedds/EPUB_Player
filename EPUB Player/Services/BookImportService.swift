@@ -963,21 +963,37 @@ enum BookImportService {
         }
     }
 
+    /// A staging file younger than this is presumed to belong to an import
+    /// that is still running, not one that crashed or was cancelled. A refresh
+    /// can run concurrently with an in-progress import (refresh has no lock on
+    /// the import pipeline), so sweeping unconditionally could delete the only
+    /// copy of a file that was *moved* rather than copied into staging.
+    private static let stalePartialImportAge: TimeInterval = 5 * 60
+
     /// Deletes dot-prefixed `.import-*` staging files orphaned in the library by
     /// an import that was cancelled or crashed between staging and commit.
     nonisolated static func removeStalePartialImports() {
         guard let libraryDirectory = try? AppStorage.booksDirectory(),
               let contents = try? FileManager.default.contentsOfDirectory(
                   at: libraryDirectory,
-                  includingPropertiesForKeys: nil,
+                  includingPropertiesForKeys: [.contentModificationDateKey],
                   options: []
               )
         else {
             return
         }
 
+        let fileManager = FileManager.default
+        let staleThreshold = Date().addingTimeInterval(-stalePartialImportAge)
         for fileURL in contents where fileURL.lastPathComponent.hasPrefix(stagedImportPrefix) {
-            try? FileManager.default.removeItem(at: fileURL)
+            let modifiedAt = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
+            // No readable modification date is treated as stale: a file the
+            // filesystem cannot date is not one this sweep can safely spare.
+            guard modifiedAt == nil || modifiedAt! < staleThreshold else {
+                continue
+            }
+            try? fileManager.removeItem(at: fileURL)
         }
     }
 }
