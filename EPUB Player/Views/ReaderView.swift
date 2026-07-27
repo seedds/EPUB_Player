@@ -22,6 +22,16 @@ struct ReaderView: View {
     @State private var state: ReaderState = .loading
     @State private var chapterItems: [ChapterListItem] = []
     @State private var isChapterListPresented = false
+    // Cached rather than sorted inline in `body`. `.navigationDestination`'s
+    // content closure re-evaluates on every body pass regardless of whether
+    // `isChapterListPresented` changed (confirmed empirically), so sorting
+    // here ran on every font-size drag and every scroll tick during playback.
+    @State private var sortedBookmarks: [Bookmark] = []
+    @State private var sortedHistory: [HistoryEntry] = []
+    // Cached for the same reason: computing this in `body` scanned the whole
+    // TOC, calling the URL-parsing `normalizedReference` up to twice per item,
+    // on every unrelated body evaluation.
+    @State private var cachedActiveChapterItemID: ChapterListItem.ID?
     @State private var currentLocationReference: EPUBReference?
     @State private var currentChapterProgress: Double?
     @State private var readingOrderResourceHrefs: [String] = []
@@ -40,12 +50,11 @@ struct ReaderView: View {
     @State private var openingSecondaryMessage: String?
     @State private var openingProgress: Double?
     @State private var hasRestoredPlaybackState = false
-    /// True while media overlays are being (re)loaded. A reload transiently nils
+    /// Number of media-overlay reloads in flight. A reload transiently nils
     /// `currentClipIndex`, which must NOT be mistaken for the user clearing
-    /// playback — otherwise a background re-import/cache refresh wipes the saved
-    /// resume point mid-session.
-    /// Number of media-overlay reloads in flight. Greater than zero means a
-    /// transiently nil clip index is a reload artifact, not a user stop.
+    /// playback — otherwise a background re-import/cache refresh wipes the
+    /// saved resume point mid-session. Greater than zero means any such nil is
+    /// a reload artifact, not a user stop.
     @State private var overlayReloadDepth = 0
 
     var body: some View {
@@ -94,9 +103,9 @@ struct ReaderView: View {
         .navigationDestination(isPresented: $isChapterListPresented) {
             ChapterAndBookmarkScreen(
                 items: chapterItems,
-                selectedItemID: activeChapterItemID,
-                bookmarks: book.bookmarks.sorted { $0.createdAt > $1.createdAt },
-                history: book.history.sorted { $0.createdAt > $1.createdAt },
+                selectedItemID: cachedActiveChapterItemID,
+                bookmarks: sortedBookmarks,
+                history: sortedHistory,
                 onSelectChapter: { item in
                     guard case .ready(_, let navigator) = state else {
                         return
@@ -166,6 +175,15 @@ struct ReaderView: View {
                 await handleScenePhaseChange(newPhase)
             }
         }
+        .withChapterAndBookmarkCacheInvalidation(
+            bookmarks: book.bookmarks,
+            history: book.history,
+            currentLocationReference: currentLocationReference,
+            chapterItems: chapterItems,
+            sortedBookmarks: $sortedBookmarks,
+            sortedHistory: $sortedHistory,
+            refreshActiveChapterItemID: refreshActiveChapterItemID
+        )
     }
 
     @MainActor
@@ -193,6 +211,8 @@ struct ReaderView: View {
         openingStatusMessage = "Opening EPUB..."
         openingSecondaryMessage = nil
         openingProgress = nil
+        sortedBookmarks = book.bookmarks.sorted { $0.createdAt > $1.createdAt }
+        sortedHistory = book.history.sorted { $0.createdAt > $1.createdAt }
         await loadMediaOverlaysIfAvailable()
         customFontFamilies = CustomFontStore.allFamilies(store: store)
 
@@ -217,6 +237,7 @@ struct ReaderView: View {
             self.readingOrderResourceHrefs = publication.readingOrder.map { normalizedResourceHref(for: $0.href) }
             state = .ready(publication: publication, navigator: navigator)
             await restoreLastPlayedClipSelectionIfAvailable(with: navigator)
+            refreshActiveChapterItemID()
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -1438,18 +1459,28 @@ struct ReaderView: View {
         return currentLocationReference
     }
 
-    private var activeChapterItemID: ChapterListItem.ID? {
+    /// Recomputes `cachedActiveChapterItemID`. Deliberately not a computed
+    /// property: it scans the whole TOC calling the URL-parsing
+    /// `normalizedReference` up to twice per item, and `body` re-evaluates on
+    /// every unrelated state change (font size, scroll position, playback
+    /// tick), so as a computed property this ran hundreds of times a second
+    /// during read-aloud. Called explicitly from the few places that can
+    /// actually change the answer.
+    @MainActor
+    private func refreshActiveChapterItemID() {
         guard let activeChapterReference else {
-            return nil
+            cachedActiveChapterItemID = nil
+            return
         }
 
         if let exactMatch = chapterItems.last(where: { item in
             normalizedReference(for: item.link.href) == activeChapterReference
         }) {
-            return exactMatch.id
+            cachedActiveChapterItemID = exactMatch.id
+            return
         }
 
-        return chapterItems.last(where: { item in
+        cachedActiveChapterItemID = chapterItems.last(where: { item in
             normalizedResourceHref(for: item.link.href) == activeChapterReference.resourceHref
         })?.id
     }
@@ -1463,6 +1494,7 @@ struct ReaderView: View {
         DebugLog.shared.log("[highlight] handleCurrentClipChange \(String(describing: oldIndex)) -> \(String(describing: newIndex)) | oldRes=\(String(describing: logOldResource)) newRes=\(String(describing: logNewResource)) | currentLocation=\(String(describing: currentLocationReference?.resourceHref)) | oldKey=\(String(describing: logOldClipKey)) newKey=\(String(describing: logNewClipKey))")
         applyCurrentClipDecoration(with: navigator)
         persistLastPlayedClip()
+        refreshActiveChapterItemID()
 
         guard let newIndex,
               playback.clips.indices.contains(newIndex)
@@ -2071,7 +2103,7 @@ private enum ReaderState {
     case failed(String)
 }
 
-private struct ChapterListItem: Identifiable {
+private struct ChapterListItem: Identifiable, Equatable {
     let level: Int
     let link: ReadiumShared.Link
 
@@ -2082,11 +2114,45 @@ private struct ChapterListItem: Identifiable {
     var title: String {
         link.title ?? link.href
     }
+
+    static func == (lhs: ChapterListItem, rhs: ChapterListItem) -> Bool {
+        lhs.id == rhs.id
+    }
 }
 
 private struct EPUBReference: Equatable {
     let resourceHref: String
     let fragmentID: String?
+}
+
+private extension View {
+    /// Splits the chapter/bookmark cache-invalidation `.onChange` handlers out
+    /// of `ReaderView.body`. Folding them directly into the main modifier
+    /// chain grew it past what the type-checker can solve in one expression.
+    @MainActor
+    func withChapterAndBookmarkCacheInvalidation(
+        bookmarks: [Bookmark],
+        history: [HistoryEntry],
+        currentLocationReference: EPUBReference?,
+        chapterItems: [ChapterListItem],
+        sortedBookmarks: Binding<[Bookmark]>,
+        sortedHistory: Binding<[HistoryEntry]>,
+        refreshActiveChapterItemID: @escaping () -> Void
+    ) -> some View {
+        self
+            .onChange(of: bookmarks) { _, newValue in
+                sortedBookmarks.wrappedValue = newValue.sorted { $0.createdAt > $1.createdAt }
+            }
+            .onChange(of: history) { _, newValue in
+                sortedHistory.wrappedValue = newValue.sorted { $0.createdAt > $1.createdAt }
+            }
+            .onChange(of: currentLocationReference) { _, _ in
+                refreshActiveChapterItemID()
+            }
+            .onChange(of: chapterItems) { _, _ in
+                refreshActiveChapterItemID()
+            }
+    }
 }
 
 private enum ChapterBookmarkTab: Hashable {
