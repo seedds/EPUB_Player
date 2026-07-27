@@ -162,6 +162,12 @@ enum BookImportService {
         store: AppStateStore,
         progressHandler: (@MainActor @Sendable (RefreshProgress) -> Void)? = nil
     ) async throws -> [Book] {
+        // Sample this before anything else: nearly every AppStorage accessor
+        // creates the directory it returns, so after the first such call the
+        // difference between "the library directory is gone" and "the library
+        // is empty" is no longer observable.
+        let libraryDirectoryExisted = AppStorage.booksDirectoryExists()
+
         await reportProgress(
             RefreshProgress(fractionCompleted: 0.02, message: "Scanning EPUB files..."),
             using: progressHandler
@@ -177,6 +183,7 @@ enum BookImportService {
         let epubURLs = try await refreshSourceEPUBURLs(
             existingBooks: existingBooks,
             fileManager: fileManager,
+            libraryDirectoryExisted: libraryDirectoryExisted,
             progressHandler: progressHandler
         )
 
@@ -185,8 +192,12 @@ enum BookImportService {
             uniquingKeysWith: { _, newer in newer }
         )
         let removedBooks = existingBooks.filter { book in
+            // Only a file that definitively is not there counts as removed. A
+            // path that fails to resolve (data protection, a transient
+            // Documents lookup failure) is unknown, not absent — treating it as
+            // absent would discard the book's bookmarks and reading position.
             guard let epubURL = try? book.resolvedEPUBFileURL() else {
-                return true
+                return false
             }
 
             return !fileManager.fileExists(atPath: epubURL.path)
@@ -792,13 +803,27 @@ enum BookImportService {
     private static func refreshSourceEPUBURLs(
         existingBooks: [Book],
         fileManager: FileManager,
+        libraryDirectoryExisted: Bool,
         progressHandler: (@MainActor @Sendable (RefreshProgress) -> Void)?
     ) async throws -> [URL] {
         do {
-            // A successful scan is authoritative, even when empty: an empty
-            // result lets the refresh remove stale records for files that are
-            // genuinely gone instead of leaving ghost books behind.
-            return try scannedLibraryEPUBURLs(fileManager: fileManager)
+            let scannedURLs = try scannedLibraryEPUBURLs(fileManager: fileManager)
+
+            // A non-empty scan is authoritative, and so is an empty one when
+            // the directory was really there — that is an ordinary "user
+            // deleted their books" refresh.
+            if !scannedURLs.isEmpty || existingBooks.isEmpty || libraryDirectoryExisted {
+                return scannedURLs
+            }
+
+            // The directory was missing and we still hold book records. The
+            // library was not deleted through the app; something removed or
+            // made the directory unavailable (a Files-app move, a restore, a
+            // data-protection eviction). Pruning here is unrecoverable, so
+            // refuse instead.
+            throw BookImportError.libraryFilesUnavailable
+        } catch let error as BookImportError {
+            throw error
         } catch {
             guard !existingBooks.isEmpty else {
                 throw error
