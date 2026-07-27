@@ -192,11 +192,18 @@ final class BookImportServiceTests: XCTestCase {
         let booksDirectory = try AppStorage.booksDirectory()
 
         // A dot-prefixed staging file orphaned by a crashed/cancelled import.
+        // Backdated: a fresh staging file is presumed to belong to a live
+        // import and must be spared (see
+        // testStalePartialImportSweepSparesFreshStagingFiles).
         let orphan = booksDirectory.appendingPathComponent(
             "\(BookImportService.stagedImportPrefix)\(UUID().uuidString)-book.epub",
             isDirectory: false
         )
         try Data("partial".utf8).write(to: orphan)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-3600)],
+            ofItemAtPath: orphan.path
+        )
 
         // A real book file that must be left untouched.
         let realBook = booksDirectory.appendingPathComponent("real.epub", isDirectory: false)
@@ -286,6 +293,123 @@ final class BookImportServiceTests: XCTestCase {
         XCTAssertEqual(store.books.map(\.title), ["Survivor"])
     }
 
+    /// Two genuinely different books that happen to share a filename. Filename
+    /// is the identity key for re-import, so the second overwrites the first
+    /// rather than creating a second record. Pinning that here because the
+    /// alternative -- two records over one file -- is silent data loss.
+    func testImportingDifferentBooksWithTheSameFilename() async throws {
+        let firstSource = tempDirectory.appendingPathComponent("a", isDirectory: true)
+        let secondSource = tempDirectory.appendingPathComponent("b", isDirectory: true)
+        try FileManager.default.createDirectory(at: firstSource, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondSource, withIntermediateDirectories: true)
+
+        let firstURL = try makeEPUBFile(named: "shared.epub", title: "First Book")
+        let movedFirst = firstSource.appendingPathComponent("shared.epub")
+        try FileManager.default.moveItem(at: firstURL, to: movedFirst)
+
+        let secondURL = try makeEPUBFile(named: "shared.epub", title: "Second Book")
+        let movedSecond = secondSource.appendingPathComponent("shared.epub")
+        try FileManager.default.moveItem(at: secondURL, to: movedSecond)
+
+        _ = try await BookImportService.importBook(from: movedFirst, filename: "shared.epub", store: store)
+        _ = try await BookImportService.importBook(
+            from: movedSecond,
+            filename: "shared.epub",
+            store: store,
+            existingBookStrategy: .overwrite
+        )
+
+        XCTAssertEqual(store.books.map(\.title), ["Second Book"])
+
+        // Every record must point at a file that exists, and no two records may
+        // share a backing file.
+        var seenPaths: Set<String> = []
+        for book in store.books {
+            let url = try book.resolvedEPUBFileURL()
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: url.path),
+                "\(book.title) points at a missing file"
+            )
+            XCTAssertTrue(
+                seenPaths.insert(url.standardizedFileURL.path).inserted,
+                "Two library records share the backing file \(url.lastPathComponent)"
+            )
+        }
+    }
+
+    /// Uploads import while the user pulls to refresh. The scan can see a
+    /// committed file before its Book record exists, which would import it a
+    /// second time under a fresh UUID and leave a duplicate.
+    func testConcurrentImportAndRefreshProduceNoDuplicates() async throws {
+        let existing = try makeEPUBFile(named: "settled.epub", title: "Settled")
+        _ = try await BookImportService.importBook(from: existing, filename: "settled.epub", store: store)
+
+        let incoming = try makeEPUBFile(named: "incoming.epub", title: "Incoming")
+        let store = self.store!
+
+        async let importResult: Void = {
+            _ = try? await BookImportService.importBook(
+                from: incoming,
+                filename: "incoming.epub",
+                store: store
+            )
+        }()
+        async let refreshResult: Void = {
+            _ = try? await BookImportService.refreshBooksFromDocuments(store: store)
+        }()
+        _ = await (importResult, refreshResult)
+
+        let filenames = store.books.map(\.originalFilename).sorted()
+        XCTAssertEqual(
+            filenames,
+            ["incoming.epub", "settled.epub"],
+            "Overlapping import and refresh produced \(filenames)"
+        )
+
+        let ids = Set(store.books.map(\.id))
+        XCTAssertEqual(ids.count, store.books.count, "Duplicate book records created")
+    }
+
+    /// The sweep must not delete staging files belonging to a live import.
+    /// An uploaded source is *moved* into staging, so deleting the staging file
+    /// mid-import destroys the user's only copy of the upload.
+    func testStalePartialImportSweepSparesFreshStagingFiles() async throws {
+        let booksDirectory = try AppStorage.booksDirectory()
+        let inFlight = booksDirectory.appendingPathComponent(
+            "\(BookImportService.stagedImportPrefix)\(UUID().uuidString)-in-flight.epub",
+            isDirectory: false
+        )
+        try Data("staged moments ago".utf8).write(to: inFlight)
+
+        BookImportService.removeStalePartialImports()
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: inFlight.path),
+            "The sweep deleted a staging file that a live import still needs"
+        )
+    }
+
+    /// Genuinely orphaned staging files must still be reclaimed.
+    func testStalePartialImportSweepRemovesOldStagingFiles() async throws {
+        let booksDirectory = try AppStorage.booksDirectory()
+        let orphan = booksDirectory.appendingPathComponent(
+            "\(BookImportService.stagedImportPrefix)\(UUID().uuidString)-orphan.epub",
+            isDirectory: false
+        )
+        try Data("left by a crash".utf8).write(to: orphan)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-3600)],
+            ofItemAtPath: orphan.path
+        )
+
+        BookImportService.removeStalePartialImports()
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: orphan.path),
+            "An hour-old staging file is an orphan and must be reclaimed"
+        )
+    }
+
     func testRefreshSweepsOrphanedStagingFiles() async throws {
         let booksDirectory = try AppStorage.booksDirectory()
         let orphan = booksDirectory.appendingPathComponent(
@@ -293,6 +417,10 @@ final class BookImportServiceTests: XCTestCase {
             isDirectory: false
         )
         try Data("partial".utf8).write(to: orphan)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-3600)],
+            ofItemAtPath: orphan.path
+        )
 
         _ = try await BookImportService.refreshBooksFromDocuments(store: store)
 
