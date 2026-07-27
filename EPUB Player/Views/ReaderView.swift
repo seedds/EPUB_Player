@@ -44,7 +44,9 @@ struct ReaderView: View {
     /// `currentClipIndex`, which must NOT be mistaken for the user clearing
     /// playback — otherwise a background re-import/cache refresh wipes the saved
     /// resume point mid-session.
-    @State private var isReloadingOverlays = false
+    /// Number of media-overlay reloads in flight. Greater than zero means a
+    /// transiently nil clip index is a reload artifact, not a user stop.
+    @State private var overlayReloadDepth = 0
 
     var body: some View {
         Group {
@@ -534,18 +536,20 @@ struct ReaderView: View {
     private func loadMediaOverlaysIfAvailable() async {
         // Guard the resume point: `playback.load` nils `currentClipIndex`, which
         // fires `handleCurrentClipChange` -> `persistLastPlayedClip`. Without
-        // this flag a mid-session reload would clear the saved clip.
+        // this guard a mid-session reload would clear the saved clip.
         //
-        // The `.onChange` that observes `currentClipIndex` is delivered by
-        // SwiftUI on a later main-actor turn, not synchronously with the
-        // mutation inside `load`. Keep the flag set until after that turn by
-        // resetting it via a trailing hop, so the clip-change handler still sees
-        // the reload in progress.
-        isReloadingOverlays = true
+        // This is a depth counter rather than a flag, for two reasons. A flag
+        // had to be cleared on a trailing main-actor hop to outlive SwiftUI's
+        // delivery of `.onChange`, which is a race: nothing guarantees the
+        // reset loses to the change notification, and when it won, the saved
+        // position was destroyed mid-session. And two reload triggers
+        // (`mediaOverlayPreparationState` and `mediaOverlayJSONPath`) both fire
+        // on a re-import, so a flag cleared by the first overlapping reload
+        // unguarded the second. Counting keeps the guard up until the last
+        // in-flight reload finishes, with no dependency on delivery timing.
+        overlayReloadDepth += 1
+        defer { overlayReloadDepth -= 1 }
         await playback.load(for: book, from: try? book.resolvedMediaOverlayJSONURL())
-        Task { @MainActor in
-            isReloadingOverlays = false
-        }
     }
 
     private var readAloudStatusMessage: String? {
@@ -719,7 +723,8 @@ struct ReaderView: View {
         guard let clip = playback.currentClip else {
             if ReaderView.shouldClearSavedClip(
                 hasRestoredPlaybackState: hasRestoredPlaybackState,
-                isReloadingOverlays: isReloadingOverlays
+                isReloadingOverlays: overlayReloadDepth > 0,
+                hasLoadedClips: !playback.clips.isEmpty
             ) {
                 book.clearLastPlayedClip()
             }
@@ -736,16 +741,23 @@ struct ReaderView: View {
 
     /// Whether a nil current clip should clear the saved resume point.
     ///
-    /// Only a genuine user stop should clear it. Two cases must NOT:
+    /// Only a genuine user stop should clear it. Three cases must NOT:
     /// - Before playback state has been restored (the book is still opening).
     /// - During a mid-session overlay reload, which transiently nils the clip
     ///   index while clips are rebuilt (e.g. a background re-import or cache
     ///   refresh). Clearing here wiped the saved position and stopped playback.
+    /// - Whenever there are no clips loaded. Stopping playback leaves the clips
+    ///   in place, so an empty clip list means they were torn down rather than
+    ///   stopped. This is the load-bearing check: unlike the reload flag, it
+    ///   reads observable state instead of inferring from timing, so it holds
+    ///   even if SwiftUI delivers the clip-index change after the reload that
+    ///   caused it has already returned.
     nonisolated static func shouldClearSavedClip(
         hasRestoredPlaybackState: Bool,
-        isReloadingOverlays: Bool
+        isReloadingOverlays: Bool,
+        hasLoadedClips: Bool
     ) -> Bool {
-        hasRestoredPlaybackState && !isReloadingOverlays
+        hasRestoredPlaybackState && !isReloadingOverlays && hasLoadedClips
     }
 
     @MainActor
