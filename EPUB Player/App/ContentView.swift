@@ -907,6 +907,12 @@ private struct SettingsView: View {
                     .disabled(hasNoLogEntries)
                 }
 
+                Section("Feedback") {
+                    Link(destination: suggestionMailURL) {
+                        Text("Email a Suggestion")
+                    }
+                }
+
             }
             .environment(\.defaultMinListRowHeight, 28)
             .navigationTitle("Settings")
@@ -915,6 +921,10 @@ private struct SettingsView: View {
                 hasNoLogEntries = DebugLog.shared.entries.isEmpty
             }
         }
+    }
+
+    private var suggestionMailURL: URL {
+        URL(string: "mailto:seedds@gmail.com?subject=EPUB%20Player%20Suggestion")!
     }
 
     private var customFontStatusText: String {
