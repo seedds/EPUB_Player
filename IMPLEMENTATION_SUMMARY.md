@@ -1,6 +1,11 @@
 # Code Review Implementation Summary
 
-This document summarizes the changes implemented based on recommendations 5-10 from the code review.
+Historical record of the changes made in response to an earlier code review.
+
+**This is a point-in-time log, not a description of the current codebase.** The code has
+moved on considerably since — see `PROJECT_CONTEXT.md` and the source itself for the
+current state. File paths below predate the move into `App/`, `Models/`, `Persistence/`,
+`Playback/`, `Services/`, `Upload/`, and `Views/`.
 
 ## Completed Changes
 
@@ -109,81 +114,49 @@ This document summarizes the changes implemented based on recommendations 5-10 f
    - Debounced save behavior
    - Immediate persistence
 
-3. Added test placeholders for CustomFontStore:
-   - Font family grouping
-   - Style detection
-   - Font removal
-   - Registration caching
-   - Synchronized families
-
-4. Added test placeholders for BookImportService:
-   - Non-EPUB rejection
-   - Valid EPUB import
-   - Cleanup on failure
-   - Existing book strategies
-   - Refresh from documents
-   - Progress reporting
+3. Added test placeholders for CustomFontStore and BookImportService.
 
 **Impact:**
 - Foundation for test-driven development
 - Regression protection
 - Easier refactoring with confidence
-- Documentation through tests
 
-**Note:** Tests are structural placeholders that need:
-- Integration with Xcode test target
-- Mock file system for persistence tests
-- Test EPUB files for import tests
-- Actual font files for font tests
+**Superseded.** The placeholders described above no longer exist. `EPUB PlayerTests/`
+now holds 20 files and 140 real, passing tests wired into the Xcode test target and CI,
+covering persistence, storage paths, import/refresh, position validation, archive and
+XML hardening, the upload server, playback, and reader logic. Storage is redirected for
+tests via the `EPUBPLAYER_DOCUMENTS_DIRECTORY` environment variable
+(`EPUB PlayerTests/TestDocumentsDirectory.swift`) rather than a mock file system, and
+fixtures are generated in-process (`ZIPFixtureBuilder.swift`, `AudioFixture.swift`).
 
 ---
 
 ### 2. Extract playback state into ReaderViewModel ⚠️
 
-**Status:** Not completed
+**Status:** Not completed — and still not completed today.
 
-**Reason:** This refactor is too risky to automate without comprehensive testing. The ReaderView has 2,103 lines with complex state dependencies. A proper refactor would require:
+**Reason:** This refactor is too risky to automate without comprehensive testing. The ReaderView had 2,103 lines with complex state dependencies (it is now ~3,000). A proper refactor would require:
 1. Careful manual extraction of state and methods
 2. Updating all 35+ references to moved properties
 3. Testing each change incrementally
 4. Ensuring no regressions in playback behavior
 
-**Recommendation:** Complete this refactor in a separate branch with thorough manual testing.
+**Recommendation:** Complete this refactor in a separate branch with thorough manual testing. Note that `PROJECT_CONTEXT.md` now records a standing preference to "keep logic in existing structures unless extraction has a clear payoff", so this should be re-justified before being attempted.
 
 ---
 
-## Build Verification
-
-Build command running in background to verify all changes compile successfully.
-
-## Summary Statistics
+## Summary Statistics (at the time of writing)
 
 - **Files Modified:** 5
 - **Files Created:** 3
-- **Lines of Documentation Added:** ~50
-- **Test Cases Created:** 15+ (structural)
 - **Completed Recommendations:** 5 of 6
 
-## Next Steps
+## Status of the Follow-Ups
 
-1. Wait for build verification to complete
-2. Add test files to Xcode project
-3. Implement test file system mocking for persistence tests
-4. Create test fixtures (EPUB files, font files)
-5. Run tests and fix any failures
-6. Consider ReaderViewModel refactor in separate branch
-7. Add CI/CD integration for automated testing
+Done since:
+- Test files added to the Xcode project and to CI (`.github/workflows/ci.yml`)
+- Test storage redirection and in-process fixtures implemented
+- Full suite runs green (140 tests)
 
-## Risk Assessment
-
-**Low Risk Changes:**
-- Lifecycle persistence (5)
-- Font registration caching (6)
-- Documentation (3)
-
-**Medium Risk Changes:**
-- Error cleanup (4) - needs testing with actual import failures
-- Unit tests (1) - need integration with Xcode
-
-**High Risk Changes:**
-- ReaderViewModel extraction (2) - deferred due to complexity
+Still open:
+- ReaderViewModel extraction (2)
