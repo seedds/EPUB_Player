@@ -461,28 +461,10 @@ enum BookImportService {
             return
         }
 
-        let positions = BookPositionValidator.Positions(
-            lastLocatorJSON: book.lastLocatorJSON,
-            lastPlayedTextResourceHref: book.lastPlayedTextResourceHref,
-            lastPlayedFragmentID: book.lastPlayedFragmentID,
-            lastPlayedClipBegin: book.lastPlayedClipBegin,
-            lastPlayedClipEnd: book.lastPlayedClipEnd,
-            bookmarks: book.bookmarks,
-            history: book.history
-        )
-        let validated = BookPositionValidator.validatedAgainstResourceHrefs(positions, resourceHrefs: resourceHrefs)
-        applyPositions(validated, to: book)
-    }
-
-    @MainActor
-    private static func applyPositions(_ positions: BookPositionValidator.Positions, to book: Book) {
-        book.lastLocatorJSON = positions.lastLocatorJSON
-        book.lastPlayedTextResourceHref = positions.lastPlayedTextResourceHref
-        book.lastPlayedFragmentID = positions.lastPlayedFragmentID
-        book.lastPlayedClipBegin = positions.lastPlayedClipBegin
-        book.lastPlayedClipEnd = positions.lastPlayedClipEnd
-        book.bookmarks = positions.bookmarks
-        book.history = positions.history
+        let positions = BookPositionValidator.Positions(book)
+        BookPositionValidator
+            .validatedAgainstResourceHrefs(positions, resourceHrefs: resourceHrefs)
+            .apply(to: book)
     }
 
     /// True when the book has any clip-based position (resume point, bookmark, or
@@ -1040,11 +1022,7 @@ enum BookAssetCacheService {
 
         // Remove any prior cover for this book, but keep the staged file if it
         // happens to already be the final name.
-        let coverPrefix = bookID.uuidString + "."
-        for url in try FileManager.default.contentsOfDirectory(at: coversDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-        where url.lastPathComponent.hasPrefix(coverPrefix) && url.standardizedFileURL.path != stagedURL.standardizedFileURL.path {
-            try? FileManager.default.removeItem(at: url)
-        }
+        try removeCoverFiles(for: bookID, in: coversDirectory, keeping: stagedURL)
 
         if stagedURL.standardizedFileURL.path != finalURL.standardizedFileURL.path {
             _ = try? FileManager.default.replaceItemAt(finalURL, withItemAt: stagedURL)
@@ -1066,9 +1044,23 @@ enum BookAssetCacheService {
     }
 
     nonisolated static func removeCachedCover(for bookID: UUID) throws {
-        let coversDirectory = try AppStorage.coversDirectory()
+        try removeCoverFiles(for: bookID, in: AppStorage.coversDirectory())
+    }
+
+    /// Deletes every `<bookID>.<ext>` cover in `coversDirectory`, optionally
+    /// sparing one file (used at commit time to keep the staged cover).
+    private nonisolated static func removeCoverFiles(
+        for bookID: UUID,
+        in coversDirectory: URL,
+        keeping keptURL: URL? = nil
+    ) throws {
         let prefix = bookID.uuidString + "."
-        for url in try FileManager.default.contentsOfDirectory(at: coversDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) where url.lastPathComponent.hasPrefix(prefix) {
+        let keptPath = keptURL?.standardizedFileURL.path
+        for url in try FileManager.default.contentsOfDirectory(
+            at: coversDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) where url.lastPathComponent.hasPrefix(prefix) && url.standardizedFileURL.path != keptPath {
             try? FileManager.default.removeItem(at: url)
         }
     }
@@ -1290,26 +1282,11 @@ final class MediaOverlayPreparationCoordinator {
     /// when preparation failed or produced no clips).
     @MainActor
     private static func revalidateClipPositions(for book: Book, against clips: [EPUBMediaOverlayClip]) {
-        let positions = BookPositionValidator.Positions(
-            lastLocatorJSON: book.lastLocatorJSON,
-            lastPlayedTextResourceHref: book.lastPlayedTextResourceHref,
-            lastPlayedFragmentID: book.lastPlayedFragmentID,
-            lastPlayedClipBegin: book.lastPlayedClipBegin,
-            lastPlayedClipEnd: book.lastPlayedClipEnd,
-            bookmarks: book.bookmarks,
-            history: book.history
-        )
+        let positions = BookPositionValidator.Positions(book)
         let validated = clips.isEmpty
             ? BookPositionValidator.droppingClipPositions(positions)
             : BookPositionValidator.validatedAgainstClips(positions, clips: clips)
-
-        book.lastLocatorJSON = validated.lastLocatorJSON
-        book.lastPlayedTextResourceHref = validated.lastPlayedTextResourceHref
-        book.lastPlayedFragmentID = validated.lastPlayedFragmentID
-        book.lastPlayedClipBegin = validated.lastPlayedClipBegin
-        book.lastPlayedClipEnd = validated.lastPlayedClipEnd
-        book.bookmarks = validated.bookmarks
-        book.history = validated.history
+        validated.apply(to: book)
     }
 
     func cancelPreparation(for bookID: UUID) {

@@ -359,20 +359,23 @@ private struct BookRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 8) {
-                    if (book.mediaOverlayClipCount ?? 0) > 0 {
+                    switch readAloudStatus {
+                    case .ready:
                         Image(systemName: "waveform")
                             .font(.subheadline)
                             .foregroundStyle(.green)
                             .accessibilityLabel("Read aloud ready")
-                    } else if book.mediaOverlayPreparationState == .pending || book.mediaOverlayPreparationState == .processing {
+                    case .preparing:
                         ProgressView()
                             .controlSize(.small)
                             .accessibilityLabel("Preparing read aloud")
-                    } else if book.mediaOverlayPreparationState == .failed {
+                    case .unavailable:
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.subheadline)
                             .foregroundStyle(.orange)
                             .accessibilityLabel("Read aloud unavailable")
+                    case .none:
+                        EmptyView()
                     }
 
                     BookProgressRing(progress: readingProgress)
@@ -391,17 +394,40 @@ private struct BookRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// The row's read-aloud badge, resolved once so the icon and the
+    /// accessibility label can never disagree.
+    private enum ReadAloudStatus {
+        case ready
+        case preparing
+        case unavailable
+
+        var accessibilityText: String {
+            switch self {
+            case .ready: "read-aloud ready"
+            case .preparing: "preparing read-aloud"
+            case .unavailable: "read-aloud unavailable"
+            }
+        }
+    }
+
+    private var readAloudStatus: ReadAloudStatus? {
+        if (book.mediaOverlayClipCount ?? 0) > 0 {
+            return .ready
+        }
+        switch book.mediaOverlayPreparationState {
+        case .pending, .processing: return .preparing
+        case .failed: return .unavailable
+        case .ready: return nil
+        }
+    }
+
     private var rowAccessibilityLabel: String {
         var parts = [book.title, "by \(book.author)"]
         if let audioDurationText {
             parts.append("read-aloud duration \(audioDurationText)")
         }
-        if (book.mediaOverlayClipCount ?? 0) > 0 {
-            parts.append("read-aloud ready")
-        } else if book.mediaOverlayPreparationState == .pending || book.mediaOverlayPreparationState == .processing {
-            parts.append("preparing read-aloud")
-        } else if book.mediaOverlayPreparationState == .failed {
-            parts.append("read-aloud unavailable")
+        if let readAloudStatus {
+            parts.append(readAloudStatus.accessibilityText)
         }
         parts.append("\(Int((readingProgress * 100).rounded())) percent read")
         return parts.joined(separator: ", ")
