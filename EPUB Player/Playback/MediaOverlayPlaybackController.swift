@@ -1208,35 +1208,14 @@ final class MediaOverlayPlaybackController: ObservableObject {
             return
         }
         didRegisterInterruptionObserver = true
-        interruptionObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.interruptionNotification,
-            object: session,
-            queue: .main
-        ) { [weak self] notification in
-            Task { @MainActor [weak self] in
-                self?.handleAudioSessionInterruption(notification)
-            }
-        }
-    }
-
-    private func handleAudioSessionInterruption(_ notification: Notification) {
-        guard let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: typeValue)
-        else {
-            return
-        }
-
-        // On `.began` the system has already paused the player. Sync state to
-        // `.paused` so the button repaints to "play" and a single subsequent tap
-        // resumes. We deliberately do not auto-resume on `.ended`: the user taps
-        // play to continue.
-        guard type == .began, state.isPlaying else {
-            return
-        }
-
-        state = .paused
-        updateNowPlayingInfo(playbackRateOverride: 0)
-        scheduleRefreshJumpAvailability()
+        interruptionObserver = observeAudioSession(
+            AVAudioSession.interruptionNotification,
+            on: session,
+            userInfoKey: AVAudioSessionInterruptionTypeKey,
+            // On `.began` the system has already paused the player. We
+            // deliberately do not act on `.ended`: the user taps play to resume.
+            pausesPlaybackOn: { (type: AVAudioSession.InterruptionType) in type == .began }
+        )
     }
 
     /// Observes audio route changes so unplugging headphones (or another
@@ -1249,29 +1228,54 @@ final class MediaOverlayPlaybackController: ObservableObject {
             return
         }
         didRegisterRouteChangeObserver = true
-        routeChangeObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.routeChangeNotification,
+        routeChangeObserver = observeAudioSession(
+            AVAudioSession.routeChangeNotification,
+            on: session,
+            userInfoKey: AVAudioSessionRouteChangeReasonKey,
+            // `.oldDeviceUnavailable` is the headphones-unplugged case: iOS has
+            // already paused the player. We do not auto-resume on re-plug.
+            pausesPlaybackOn: { (reason: AVAudioSession.RouteChangeReason) in reason == .oldDeviceUnavailable }
+        )
+    }
+
+    /// Observes an audio-session notification whose `userInfo` carries a raw
+    /// `UInt` cause under `userInfoKey`, and syncs published state to `.paused`
+    /// when `pausesPlaybackOn` accepts that cause.
+    ///
+    /// Both interruptions and route changes are cases where iOS has already
+    /// paused the underlying `AVPlayer`; without syncing, the controller would
+    /// still report `.playing`, leaving the play button showing the pause icon,
+    /// stale lock-screen info, and a resume that takes two taps.
+    ///
+    /// The `userInfo` is decoded in the notification callback (delivered on
+    /// `.main`) rather than inside the hop, so the non-`Sendable` `Notification`
+    /// never crosses into the `@MainActor` task.
+    private func observeAudioSession<Cause: RawRepresentable>(
+        _ name: Notification.Name,
+        on session: AVAudioSession,
+        userInfoKey: String,
+        pausesPlaybackOn shouldPause: @escaping (Cause) -> Bool
+    ) -> NSObjectProtocol where Cause.RawValue == UInt {
+        NotificationCenter.default.addObserver(
+            forName: name,
             object: session,
             queue: .main
         ) { [weak self] notification in
+            guard let rawValue = notification.userInfo?[userInfoKey] as? UInt,
+                  let cause = Cause(rawValue: rawValue),
+                  shouldPause(cause)
+            else {
+                return
+            }
             Task { @MainActor [weak self] in
-                self?.handleAudioSessionRouteChange(notification)
+                self?.syncStateToSystemPause()
             }
         }
     }
 
-    private func handleAudioSessionRouteChange(_ notification: Notification) {
-        guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
-              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
-        else {
-            return
-        }
-
-        // `.oldDeviceUnavailable` is the headphones-unplugged case: iOS has
-        // already paused the player. Sync to `.paused` so the icon repaints and
-        // a single tap resumes. We do not auto-resume — playback stays paused
-        // until the user taps play.
-        guard reason == .oldDeviceUnavailable, state.isPlaying else {
+    /// Repaints published state after the system paused playback behind our back.
+    private func syncStateToSystemPause() {
+        guard state.isPlaying else {
             return
         }
 
