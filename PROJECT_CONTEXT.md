@@ -37,6 +37,14 @@
 - Updated the upload/storage messaging in the UI and README to reflect `Documents/Books` and `Documents/Cache`.
 - Built successfully after the refactor.
 - Changes have been committed and pushed to GitHub.
+- Added an XCTest suite (140 tests across 20 files in `EPUB PlayerTests/`) covering
+  persistence, storage paths, import/refresh, position validation, archive and XML
+  hardening, the upload server, playback, and reader logic. CI runs it on every
+  push and PR to `main` (`.github/workflows/ci.yml`).
+- Added bookmarks and automatic reading history, surfaced on the Contents screen.
+- Added a bounded in-app debug log at `Documents/Cache/debug-log.txt`.
+- Hardened untrusted EPUB handling: bounded decompression, pinned XML entity
+  resolution, and path-traversal checks on stored paths.
 
 ### Currently In Progress
 - Fresh-install runtime validation is still needed.
@@ -50,7 +58,6 @@
 ### Blocked or Uncertain
 - No hard engineering blocker is known.
 - Runtime behavior on a fresh install has not yet been fully validated after the persistence cutover.
-- The README still contains one stale tech-stack detail: it mentions SwiftData even though app persistence no longer uses SwiftData.
 
 ## 3. Key Requirements
 
@@ -89,18 +96,19 @@
 ## 4. Architecture / Structure
 
 ### Main Components
-- `EPUB Player/EPUBPlayerApp.swift`
+- `EPUB Player/App/EPUBPlayerApp.swift`
   - App entry point.
   - Creates and injects a shared `AppStateStore`.
 
-- `EPUB Player/AppStateStore.swift`
+- `EPUB Player/Persistence/AppStateStore.swift`
   - Central persisted app state.
   - Stores books, custom font metadata, and reader/upload settings.
   - Reads/writes `Documents/Cache/state.json`.
   - Observes each `Book` and debounces saves.
 
-- `EPUB Player/AppStorage.swift`
+- `EPUB Player/Persistence/AppStorage.swift`
   - Defines storage layout and path helpers.
+  - This is the app's own type, unrelated to SwiftUI's `@AppStorage`.
   - Key directories:
     - `Documents/Books/`
     - `Documents/Cache/`
@@ -110,48 +118,66 @@
     - `Documents/Cache/Uploads/`
     - `Documents/Cache/Fonts/`
 
-- `EPUB Player/Book.swift`
+- `EPUB Player/Models/Book.swift`
   - Plain codable observable model for a library book.
   - Holds library metadata, progress state, and media overlay preparation state.
+  - Also defines `SavedPositionRecord`, the shared shape behind `Bookmark` and
+    `HistoryEntry`, which carries their position fields and row-rendering text.
 
-- `EPUB Player/ContentView.swift`
+- `EPUB Player/App/ContentView.swift`
   - Top-level tab UI.
   - Contains the Books, Upload, and Settings flows.
   - Starts/resumes media overlay preparation and restores missing covers when app becomes active.
 
-- `EPUB Player/ReaderView.swift`
+- `EPUB Player/Views/ReaderView.swift`
   - EPUB reading UI built around Readium navigator.
   - Applies theme/typography settings from `AppStateStore`.
   - Coordinates playback, location persistence, chapter navigation, and highlight rendering.
 
-- `EPUB Player/BookImportService.swift`
+- `EPUB Player/Services/BookImportService.swift`
   - Handles EPUB import, library refresh, cover regeneration, and overlay preparation scheduling.
   - Contains `BookAssetCacheService` and `MediaOverlayPreparationCoordinator`.
 
-- `EPUB Player/UploadServerController.swift`
+- `EPUB Player/Upload/UploadServerController.swift`
   - Owns the upload server state machine and import queue.
   - Handles manual imports and server-driven imports.
   - Exposes library listing, rename, and delete via server callbacks.
 
-- `EPUB Player/LocalUploadServer.swift`
+- `EPUB Player/Upload/LocalUploadServer.swift`
   - Lightweight HTTP server built on `Network.framework`.
   - Serves upload page and simple library API endpoints.
 
-- `EPUB Player/CustomFontStore.swift`
+- `EPUB Player/Upload/HTTPUploadRequest.swift`
+  - Parses incoming multipart upload requests.
+
+- `EPUB Player/Services/CustomFontStore.swift`
   - Imports custom fonts into `Documents/Cache/Fonts`.
   - Stores font family metadata in `AppStateStore`.
   - Registers fonts for UI and produces Readium font declarations.
 
-- `EPUB Player/ReadiumBookService.swift`
+- `EPUB Player/Services/ReadiumBookService.swift`
   - Opens stored EPUBs using Readium Streamer.
 
-- `EPUB Player/EPUBMetadataService.swift`
+- `EPUB Player/Services/EPUBMetadataService.swift`
   - Extracts package metadata and cover references from EPUB archives.
 
-- `EPUB Player/EPUBMediaOverlayService.swift`
+- `EPUB Player/Services/EPUBMediaOverlayService.swift`
   - Parses EPUB media overlay content and writes normalized overlay manifests.
 
-- `EPUB Player/MediaOverlayPlaybackController.swift`
+- `EPUB Player/Services/EPUBArchive.swift`
+  - Bounded ZIP extraction for untrusted EPUB files.
+
+- `EPUB Player/Services/BookPositionValidator.swift`
+  - Revalidates saved positions (resume point, bookmarks, history) after a re-import,
+    against the new resource hrefs and then the new clip set.
+
+- `EPUB Player/Services/ClipLocationMatcher.swift`
+  - Resolves a resource/fragment reference to an index in the clip list.
+
+- `EPUB Player/Services/DebugLog.swift`
+  - Bounded in-app debug log written to `Documents/Cache/debug-log.txt`.
+
+- `EPUB Player/Playback/MediaOverlayPlaybackController.swift`
   - Loads overlay clip manifests.
   - Materializes audio assets into cache.
   - Controls `AVPlayer` playback, jumping, resume, and auto-advance.
@@ -182,6 +208,10 @@
 
 - Build command:
   - `xcodebuild -project "EPUB Player.xcodeproj" -scheme "EPUB Player" -destination 'generic/platform=iOS Simulator' build`
+
+- Test command:
+  - `xcodebuild test -scheme "EPUB Player" -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
+  - Tests redirect storage via the `EPUBPLAYER_DOCUMENTS_DIRECTORY` environment variable (see `TestDocumentsDirectory.swift`).
 
 ### Dependencies and Integrations
 - SwiftUI for app UI.
@@ -222,7 +252,10 @@
 - `Book` is no longer a SwiftData `@Model`; it is now a codable `ObservableObject`.
 - `AppStateStore` debounces writes with a short delay, but `persistNow()` forces an immediate save.
 - `AppStateStore` writes state using `Data.write(..., options: .atomic)`.
-- `AppStateStore` silently falls back to default state if `state.json` is missing or decoding fails.
+- `AppStateStore` decodes each key independently, so one bad field cannot reset the whole library.
+- If `state.json` is entirely unreadable, it is moved aside to
+  `Documents/Cache/state-corrupt-<timestamp>.json` before defaults are used, so the
+  original is never silently overwritten.
 - `Book.coverImagePath` and `Book.mediaOverlayJSONPath` are stored as filenames relative to cache directories, not full paths.
 - `Book.epubFilePath` should be treated as a stored relative path under `Documents`, typically `Books/<filename>`.
 
@@ -264,14 +297,15 @@
 
 ### Risks
 - Fresh-install runtime behavior has not yet been fully validated end-to-end.
-- `state.json` decode failure currently resets state to defaults without a dedicated recovery UI.
-- README currently contains at least one stale architecture detail about SwiftData.
-- The local HTTP server defaults to port `80`, which may collide with other services.
+- A wholly unreadable `state.json` is preserved as `state-corrupt-<timestamp>.json`, but
+  there is still no user-visible recovery UI and the backups are never pruned.
+- The local HTTP server's rename and delete endpoints are unauthenticated when no
+  upload password is set.
 - Network upload depends on same-network connectivity and the availability of a Wi-Fi IP address.
 
 ### Unresolved Design or Technical Questions
-- Should corrupted `state.json` eventually surface a user-visible recovery warning instead of silently resetting?
-- Should the README be updated to fully remove old SwiftData references?
+- Should a corrupted `state.json` surface a user-visible recovery warning, and should old `state-corrupt-*.json` backups be pruned?
+- Should the upload server's rename/delete endpoints require a password rather than defaulting to open?
 - Is additional runtime validation needed for Files app visibility and deletion/reset behavior on real devices?
 
 ## 8. Next Steps
@@ -289,13 +323,12 @@
 - Verify deleting `Documents` fully resets the app.
 
 ### Later Tasks
-- Update README tech-stack wording to remove stale SwiftData references.
-- Consider adding explicit corruption handling for `state.json`.
-- Consider adding more test coverage around storage layout and refresh behavior if the project adopts tests.
+- Consider a user-visible recovery path (and backup pruning) for a corrupted `state.json`.
+- Consider requiring the upload password for the server's rename/delete endpoints.
 
 ### Suggested Priorities
 1. Fresh-install runtime verification.
-2. README cleanup.
+2. Upload server authorization for destructive endpoints.
 3. Optional resilience improvements around corrupted persisted state.
 
 ## 9. How Future AI Should Help
@@ -315,9 +348,9 @@
 ### Things the AI Should Avoid
 - Do not reintroduce SwiftData persistence or `UserDefaults` persistence for app state without explicit approval.
 - Do not add migration layers, backward-compatibility shims, or duplicate persistence systems unless explicitly requested.
-- Do not assume README architecture notes are fully current.
 - Do not change file-path semantics or storage locations casually.
 - Do not remove or overwrite unrelated user changes in the worktree.
+- Do not land changes without running the test suite; it is wired into CI.
 
 ### Context to Preserve Across Future Conversations
 - The persistence refactor is complete in code and pushed, but runtime validation is still pending.
@@ -329,8 +362,12 @@
 ## Reference Snapshot
 - Repository: `https://github.com/seedds/EPUB_Player.git`
 - Primary branch: `main`
-- Latest known persistence-refactor commit: `0d9253e` (`Move app persistence into Documents`)
-- Current state when this file was written:
+- Persistence-refactor commit: `0d9253e` (`Move app persistence into Documents`)
+- Current state when this file was last updated:
   - code changes committed and pushed
   - simulator build succeeded
+  - 140 tests passing
   - manual fresh-install runtime verification still pending
+
+Section 4's file paths, section 7's risks, and this snapshot are the parts most likely
+to drift. Verify them against the code before relying on them.
