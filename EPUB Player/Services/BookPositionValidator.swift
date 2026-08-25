@@ -32,6 +32,50 @@ nonisolated enum BookPositionValidator {
         var lastPlayedClipEnd: Double?
         var bookmarks: [Bookmark]
         var history: [HistoryEntry]
+
+        init(
+            lastLocatorJSON: String?,
+            lastPlayedTextResourceHref: String?,
+            lastPlayedFragmentID: String?,
+            lastPlayedClipBegin: Double?,
+            lastPlayedClipEnd: Double?,
+            bookmarks: [Bookmark],
+            history: [HistoryEntry]
+        ) {
+            self.lastLocatorJSON = lastLocatorJSON
+            self.lastPlayedTextResourceHref = lastPlayedTextResourceHref
+            self.lastPlayedFragmentID = lastPlayedFragmentID
+            self.lastPlayedClipBegin = lastPlayedClipBegin
+            self.lastPlayedClipEnd = lastPlayedClipEnd
+            self.bookmarks = bookmarks
+            self.history = history
+        }
+
+        /// Snapshots the positions currently held by `book`.
+        @MainActor
+        init(_ book: Book) {
+            self.init(
+                lastLocatorJSON: book.lastLocatorJSON,
+                lastPlayedTextResourceHref: book.lastPlayedTextResourceHref,
+                lastPlayedFragmentID: book.lastPlayedFragmentID,
+                lastPlayedClipBegin: book.lastPlayedClipBegin,
+                lastPlayedClipEnd: book.lastPlayedClipEnd,
+                bookmarks: book.bookmarks,
+                history: book.history
+            )
+        }
+
+        /// Writes these positions back onto `book`.
+        @MainActor
+        func apply(to book: Book) {
+            book.lastLocatorJSON = lastLocatorJSON
+            book.lastPlayedTextResourceHref = lastPlayedTextResourceHref
+            book.lastPlayedFragmentID = lastPlayedFragmentID
+            book.lastPlayedClipBegin = lastPlayedClipBegin
+            book.lastPlayedClipEnd = lastPlayedClipEnd
+            book.bookmarks = bookmarks
+            book.history = history
+        }
     }
 
     /// Prunes positions whose resource is no longer present in the new EPUB.
@@ -123,35 +167,8 @@ nonisolated enum BookPositionValidator {
             }
         }
 
-        result.bookmarks = positions.bookmarks.compactMap { bookmark in
-            guard hasClipFields(textResourceHref: bookmark.textResourceHref, clipBegin: bookmark.clipBegin) else {
-                return bookmark
-            }
-            guard let key = clipKey(resourceHref: bookmark.textResourceHref, fragmentID: bookmark.fragmentID),
-                  let match = clipByKey[key]
-            else {
-                return nil
-            }
-            var updated = bookmark
-            updated.clipBegin = match.clipBegin
-            updated.clipEnd = match.clipEnd
-            return updated
-        }
-
-        result.history = positions.history.compactMap { entry in
-            guard hasClipFields(textResourceHref: entry.textResourceHref, clipBegin: entry.clipBegin) else {
-                return entry
-            }
-            guard let key = clipKey(resourceHref: entry.textResourceHref, fragmentID: entry.fragmentID),
-                  let match = clipByKey[key]
-            else {
-                return nil
-            }
-            var updated = entry
-            updated.clipBegin = match.clipBegin
-            updated.clipEnd = match.clipEnd
-            return updated
-        }
+        result.bookmarks = positions.bookmarks.compactMap { revalidated($0, against: clipByKey) }
+        result.history = positions.history.compactMap { revalidated($0, against: clipByKey) }
 
         return result
     }
@@ -164,16 +181,32 @@ nonisolated enum BookPositionValidator {
         result.lastPlayedFragmentID = nil
         result.lastPlayedClipBegin = nil
         result.lastPlayedClipEnd = nil
-        result.bookmarks = positions.bookmarks.filter {
-            !hasClipFields(textResourceHref: $0.textResourceHref, clipBegin: $0.clipBegin)
-        }
-        result.history = positions.history.filter {
-            !hasClipFields(textResourceHref: $0.textResourceHref, clipBegin: $0.clipBegin)
-        }
+        result.bookmarks = positions.bookmarks.filter { !hasClipFields($0) }
+        result.history = positions.history.filter { !hasClipFields($0) }
         return result
     }
 
     // MARK: - Helpers
+
+    /// Keeps a record without clip fields as-is, refreshes a matched record's
+    /// clip times, and drops a clip-bearing record with no match.
+    private static func revalidated<Record: SavedPositionRecord>(
+        _ record: Record,
+        against clipByKey: [ClipKey: (clipBegin: Double, clipEnd: Double?)]
+    ) -> Record? {
+        guard hasClipFields(record) else {
+            return record
+        }
+        guard let key = clipKey(resourceHref: record.textResourceHref, fragmentID: record.fragmentID),
+              let match = clipByKey[key]
+        else {
+            return nil
+        }
+        var updated = record
+        updated.clipBegin = match.clipBegin
+        updated.clipEnd = match.clipEnd
+        return updated
+    }
 
     private struct ClipKey: Hashable {
         let resourceFilename: String
@@ -192,6 +225,10 @@ nonisolated enum BookPositionValidator {
 
     private static func hasClipFields(textResourceHref: String?, clipBegin: Double?) -> Bool {
         textResourceHref != nil && clipBegin != nil
+    }
+
+    private static func hasClipFields(_ record: some SavedPositionRecord) -> Bool {
+        hasClipFields(textResourceHref: record.textResourceHref, clipBegin: record.clipBegin)
     }
 
     /// Extracts the resource href from a Readium locator JSON string. Returns
