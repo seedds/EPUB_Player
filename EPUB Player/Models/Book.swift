@@ -21,8 +21,69 @@ struct NormalizedBookStoragePaths: Equatable {
     let mediaOverlayJSONPath: String?
 }
 
-nonisolated struct Bookmark: Identifiable, Codable, Hashable {
-    let id: UUID
+/// A saved place in a book, shared by `Bookmark` (saved deliberately) and
+/// `HistoryEntry` (recorded automatically). The two records carry the same
+/// position and display fields, so anything that resolves, prunes, or renders a
+/// saved place works against this protocol rather than either concrete type.
+nonisolated protocol SavedPositionRecord: Identifiable, Codable, Hashable {
+    var id: UUID { get }
+    var chapterTitle: String? { get }
+    var locatorJSON: String? { get }
+    var resourceHref: String? { get }
+    var chapterProgress: Double? { get }
+    var clipText: String? { get }
+    var textResourceHref: String? { get }
+    var fragmentID: String? { get }
+    var clipBegin: Double? { get set }
+    var clipEnd: Double? { get set }
+    var clipNumberInChapter: Int? { get }
+    var clipCountInChapter: Int? { get }
+    var createdAt: Date { get }
+}
+
+extension SavedPositionRecord {
+    /// The record's own text if it has any. Callers supply the fallback label,
+    /// which differs per record kind.
+    var displayPrimaryText: String? {
+        if let clipText, !clipText.isEmpty {
+            return clipText
+        }
+        if let chapterTitle, !chapterTitle.isEmpty {
+            return chapterTitle
+        }
+        return nil
+    }
+
+    /// The subtitle line: `leadingParts`, then chapter (only when the primary
+    /// line already showed clip text), clip position, progress, and timestamp.
+    func displaySecondaryText(leadingParts: [String] = []) -> String {
+        var parts = leadingParts.filter { !$0.isEmpty }
+
+        if clipText?.isEmpty == false,
+           let chapterTitle,
+           !chapterTitle.isEmpty {
+            parts.append(chapterTitle)
+        }
+
+        if let clipNumberInChapter, let clipCountInChapter {
+            parts.append("Clip \(clipNumberInChapter)/\(clipCountInChapter)")
+        }
+
+        if let chapterProgress {
+            parts.append("\(Int((chapterProgress * 100).rounded()))%")
+        }
+
+        parts.append(createdAt.formatted(date: .abbreviated, time: .shortened))
+        return parts.joined(separator: " · ")
+    }
+}
+
+// Both records rely on the synthesized memberwise initializer. `id` and
+// `createdAt` are declared `var` with a default so callers can omit them; the
+// remaining optionals default to `nil`. Codable, Hashable, and Identifiable are
+// all synthesized through `SavedPositionRecord`.
+nonisolated struct Bookmark: SavedPositionRecord {
+    var id: UUID = UUID()
     var chapterTitle: String?
     var locatorJSON: String?
     var resourceHref: String?
@@ -35,43 +96,11 @@ nonisolated struct Bookmark: Identifiable, Codable, Hashable {
     var clipEnd: Double?
     var clipNumberInChapter: Int?
     var clipCountInChapter: Int?
-    var createdAt: Date
-
-    init(
-        id: UUID = UUID(),
-        chapterTitle: String? = nil,
-        locatorJSON: String? = nil,
-        resourceHref: String? = nil,
-        chapterProgress: Double? = nil,
-        totalProgress: Double? = nil,
-        clipText: String? = nil,
-        textResourceHref: String? = nil,
-        fragmentID: String? = nil,
-        clipBegin: Double? = nil,
-        clipEnd: Double? = nil,
-        clipNumberInChapter: Int? = nil,
-        clipCountInChapter: Int? = nil,
-        createdAt: Date = Date()
-    ) {
-        self.id = id
-        self.chapterTitle = chapterTitle
-        self.locatorJSON = locatorJSON
-        self.resourceHref = resourceHref
-        self.chapterProgress = chapterProgress
-        self.totalProgress = totalProgress
-        self.clipText = clipText
-        self.textResourceHref = textResourceHref
-        self.fragmentID = fragmentID
-        self.clipBegin = clipBegin
-        self.clipEnd = clipEnd
-        self.clipNumberInChapter = clipNumberInChapter
-        self.clipCountInChapter = clipCountInChapter
-        self.createdAt = createdAt
-    }
+    var createdAt: Date = Date()
 }
 
-nonisolated struct HistoryEntry: Identifiable, Codable, Hashable {
-    let id: UUID
+nonisolated struct HistoryEntry: SavedPositionRecord {
+    var id: UUID = UUID()
     var reason: String?
     var chapterTitle: String?
     var locatorJSON: String?
@@ -85,41 +114,7 @@ nonisolated struct HistoryEntry: Identifiable, Codable, Hashable {
     var clipEnd: Double?
     var clipNumberInChapter: Int?
     var clipCountInChapter: Int?
-    var createdAt: Date
-
-    init(
-        id: UUID = UUID(),
-        reason: String? = nil,
-        chapterTitle: String? = nil,
-        locatorJSON: String? = nil,
-        resourceHref: String? = nil,
-        chapterProgress: Double? = nil,
-        totalProgress: Double? = nil,
-        clipText: String? = nil,
-        textResourceHref: String? = nil,
-        fragmentID: String? = nil,
-        clipBegin: Double? = nil,
-        clipEnd: Double? = nil,
-        clipNumberInChapter: Int? = nil,
-        clipCountInChapter: Int? = nil,
-        createdAt: Date = Date()
-    ) {
-        self.id = id
-        self.reason = reason
-        self.chapterTitle = chapterTitle
-        self.locatorJSON = locatorJSON
-        self.resourceHref = resourceHref
-        self.chapterProgress = chapterProgress
-        self.totalProgress = totalProgress
-        self.clipText = clipText
-        self.textResourceHref = textResourceHref
-        self.fragmentID = fragmentID
-        self.clipBegin = clipBegin
-        self.clipEnd = clipEnd
-        self.clipNumberInChapter = clipNumberInChapter
-        self.clipCountInChapter = clipCountInChapter
-        self.createdAt = createdAt
-    }
+    var createdAt: Date = Date()
 }
 
 nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable {
