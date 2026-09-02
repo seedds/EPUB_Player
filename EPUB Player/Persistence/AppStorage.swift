@@ -11,6 +11,7 @@ enum AppStorageError: Error {
     /// A stored relative path escaped (or tried to escape) its intended base
     /// directory — e.g. via `..` components in an attacker-edited state.json.
     case pathEscapesBaseDirectory(storedPath: String)
+    case invalidStoredFilePath(storedPath: String)
 }
 
 enum AppStorage {
@@ -112,7 +113,35 @@ enum AppStorage {
     }
 
     nonisolated static func bookFileURL(storedPath: String) throws -> URL {
-        try containedFileURL(base: documentsDirectory(), storedPath: storedPath)
+        let components = storedPath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        if components.contains(where: { $0 == "." || $0 == ".." }) {
+            throw AppStorageError.pathEscapesBaseDirectory(storedPath: storedPath)
+        }
+        guard components.count == 2,
+              components[0] == booksDirectoryName,
+              isValidStoredFilename(components[1], extensions: ["epub"])
+        else {
+            throw AppStorageError.invalidStoredFilePath(storedPath: storedPath)
+        }
+
+        return try validatedStoredFileURL(
+            base: booksDirectory(),
+            storedFilename: components[1],
+            originalStoredPath: storedPath
+        )
+    }
+
+    nonisolated static func customFontFileURL(storedFilename: String) throws -> URL {
+        let stem = URL(fileURLWithPath: storedFilename).deletingPathExtension().lastPathComponent
+        guard isValidStoredFilename(storedFilename, extensions: ["ttf", "otf"]), UUID(uuidString: stem) != nil else {
+            throw AppStorageError.invalidStoredFilePath(storedPath: storedFilename)
+        }
+
+        return try validatedStoredFileURL(
+            base: customFontsDirectory(),
+            storedFilename: storedFilename,
+            originalStoredPath: storedFilename
+        )
     }
 
     /// Joins a stored, potentially attacker-controlled relative path onto a
@@ -143,6 +172,35 @@ enum AppStorage {
             throw AppStorageError.pathEscapesBaseDirectory(storedPath: storedPath)
         }
 
+        return fileURL
+    }
+
+    private nonisolated static func isValidStoredFilename(_ filename: String, extensions: Set<String>) -> Bool {
+        guard !filename.isEmpty,
+              filename != ".",
+              filename != "..",
+              !filename.contains("/"),
+              !filename.contains("\\"),
+              URL(fileURLWithPath: filename).lastPathComponent == filename,
+              extensions.contains(URL(fileURLWithPath: filename).pathExtension.lowercased())
+        else {
+            return false
+        }
+        return true
+    }
+
+    private nonisolated static func validatedStoredFileURL(
+        base: URL,
+        storedFilename: String,
+        originalStoredPath: String
+    ) throws -> URL {
+        let fileURL = try containedFileURL(base: base, storedPath: storedFilename)
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            let values = try fileURL.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isDirectory != true, values.isSymbolicLink != true else {
+                throw AppStorageError.invalidStoredFilePath(storedPath: originalStoredPath)
+            }
+        }
         return fileURL
     }
 

@@ -143,6 +143,36 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
         XCTAssertEqual(controller.currentClipIndex, 1)
     }
 
+    func testStaleOverlayLoadDoesNotReplaceNewerClips() async throws {
+        let oldClip = makeClip(audioPath: "old.mp3", fragmentID: "old")
+        let newClip = makeClip(audioPath: "new.mp3", fragmentID: "new")
+        let oldLoadStarted = expectation(description: "old load started")
+        let releaseOldLoad = expectation(description: "release old load")
+        let book = Book(title: "Book", originalFilename: "book.epub", epubFilePath: "Books/book.epub")
+
+        controller.configureClipsResolverForTesting { url in
+            if url.lastPathComponent == "old.json" {
+                oldLoadStarted.fulfill()
+                await self.fulfillment(of: [releaseOldLoad], timeout: 5)
+                return [oldClip]
+            }
+            return [newClip]
+        }
+
+        let oldLoad = Task {
+            await controller.load(for: book, from: URL(fileURLWithPath: "/tmp/old.json"))
+        }
+        await fulfillment(of: [oldLoadStarted], timeout: 5)
+
+        await controller.load(for: book, from: URL(fileURLWithPath: "/tmp/new.json"))
+        XCTAssertEqual(controller.clips, [newClip])
+
+        releaseOldLoad.fulfill()
+        await oldLoad.value
+
+        XCTAssertEqual(controller.clips, [newClip], "A stale load must not overwrite the newest manifest")
+    }
+
     /// A superseded start must cancel its in-flight audio-resolution task so the
     /// older transition stops working instead of running to completion.
     func testStartingNewerClipCancelsPriorStartTask() async throws {

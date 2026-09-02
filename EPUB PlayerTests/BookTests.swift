@@ -125,6 +125,20 @@ final class BookTests: XCTestCase {
         XCTAssertEqual(book.title, "New")
     }
 
+    func testContentGenerationRoundTripsThroughPersistence() throws {
+        let generation = UUID()
+        let book = Book(
+            title: "Book",
+            originalFilename: "Book.epub",
+            epubFilePath: "Books/Book.epub",
+            contentGeneration: generation
+        )
+
+        let decoded = try JSONDecoder().decode(Book.self, from: JSONEncoder().encode(book))
+
+        XCTAssertEqual(decoded.contentGeneration, generation)
+    }
+
     private func makeBook(
         title: String = "Book",
         originalFilename: String = "Book.epub"

@@ -218,14 +218,11 @@ enum CustomFontStore {
     }
 
     static func fontFamilyDeclarations(customFontFamilies: [ImportedFontFamily]) -> [AnyHTMLFontFamilyDeclaration] {
-        let directory = try? AppStorage.customFontsDirectory()
         return customFontFamilies.compactMap { family in
-            guard let directory else {
-                return nil
-            }
-
             let fontFaces = family.files.compactMap { file -> CSSFontFace? in
-                let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+                guard let fileURL = try? AppStorage.customFontFileURL(storedFilename: file.storedFilename) else {
+                    return nil
+                }
                 guard let readiumFileURL = FileURL(url: fileURL) else {
                     return nil
                 }
@@ -246,16 +243,14 @@ enum CustomFontStore {
     }
 
     static func registerFontsForUI(in families: [ImportedFontFamily]) {
-        guard let directory = try? AppStorage.customFontsDirectory() else {
-            return
-        }
-
         registrationLock.lock()
         defer { registrationLock.unlock() }
 
         for family in families {
             for file in family.files {
-                let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+                guard let fileURL = try? AppStorage.customFontFileURL(storedFilename: file.storedFilename) else {
+                    continue
+                }
 
                 guard !registeredFontURLs.contains(fileURL) else {
                     continue
@@ -284,7 +279,7 @@ enum CustomFontStore {
     @MainActor
     private static func synchronizedFamilies(store: AppStateStore) -> [ImportedFontFamily] {
         let loadedFamilies = store.customFontFamilies
-        guard let directory = try? AppStorage.customFontsDirectory() else {
+        guard (try? AppStorage.customFontsDirectory()) != nil else {
             // Resolving the directory can fail transiently (disk full,
             // protected data unavailable); that says nothing about the fonts,
             // so keep the records instead of erasing the registry.
@@ -293,7 +288,9 @@ enum CustomFontStore {
 
         let filteredFamilies = loadedFamilies.compactMap { family -> ImportedFontFamily? in
             let remainingFiles = family.files.filter { file in
-                let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+                guard let fileURL = try? AppStorage.customFontFileURL(storedFilename: file.storedFilename) else {
+                    return false
+                }
                 return FileManager.default.fileExists(atPath: fileURL.path)
             }
 
@@ -401,11 +398,12 @@ enum CustomFontStore {
     }
 
     private static func removeStoredFiles(_ files: [ImportedFontFile]) throws {
-        let directory = try AppStorage.customFontsDirectory()
         let fileManager = FileManager.default
 
         for file in files {
-            let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+            guard let fileURL = try? AppStorage.customFontFileURL(storedFilename: file.storedFilename) else {
+                continue
+            }
             if fileManager.fileExists(atPath: fileURL.path) {
                 try? fileManager.removeItem(at: fileURL)
             }
@@ -413,15 +411,13 @@ enum CustomFontStore {
     }
 
     private static func unregisterFontsFromCache(_ files: [ImportedFontFile]) {
-        guard let directory = try? AppStorage.customFontsDirectory() else {
-            return
-        }
-
         registrationLock.lock()
         defer { registrationLock.unlock() }
 
         for file in files {
-            let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+            guard let fileURL = try? AppStorage.customFontFileURL(storedFilename: file.storedFilename) else {
+                continue
+            }
             // Without the OS-level unregistration, a stale process-scope
             // registration pointing at the deleted file blocks re-importing
             // the same font until relaunch.
@@ -437,15 +433,13 @@ enum CustomFontStore {
     /// be registered with CoreText — otherwise a broken font is listed as if
     /// it worked and silently renders fallback glyphs.
     static func registrationFailureMessage(for families: [ImportedFontFamily]) -> String? {
-        guard let directory = try? AppStorage.customFontsDirectory() else {
-            return nil
-        }
-
         registrationLock.lock()
         defer { registrationLock.unlock() }
 
         let failedNames = families.flatMap(\.files).compactMap { file -> String? in
-            let fileURL = directory.appendingPathComponent(file.storedFilename, isDirectory: false)
+            guard let fileURL = try? AppStorage.customFontFileURL(storedFilename: file.storedFilename) else {
+                return nil
+            }
             return failedRegistrationURLs.contains(fileURL) ? file.originalFilename : nil
         }
         guard !failedNames.isEmpty else {

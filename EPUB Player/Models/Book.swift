@@ -143,6 +143,7 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
     @Published var mediaOverlayPreparationError: String?
     @Published var sourceFileSize: Int64?
     @Published var sourceFileModifiedAt: Date?
+    @Published var contentGeneration: UUID
     @Published var importedAt: Date
     @Published var lastOpenedAt: Date?
     /// Set when the file was re-imported and clip-based positions are awaiting
@@ -173,6 +174,7 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         mediaOverlayPreparationError: String? = nil,
         sourceFileSize: Int64? = nil,
         sourceFileModifiedAt: Date? = nil,
+        contentGeneration: UUID = UUID(),
         importedAt: Date = Date(),
         lastOpenedAt: Date? = nil,
         pendingClipPositionRevalidation: Bool = false
@@ -200,6 +202,7 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         self.mediaOverlayPreparationError = mediaOverlayPreparationError
         self.sourceFileSize = sourceFileSize
         self.sourceFileModifiedAt = sourceFileModifiedAt
+        self.contentGeneration = contentGeneration
         self.importedAt = importedAt
         self.lastOpenedAt = lastOpenedAt
         self.pendingClipPositionRevalidation = pendingClipPositionRevalidation
@@ -229,6 +232,7 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         case mediaOverlayPreparationError
         case sourceFileSize
         case sourceFileModifiedAt
+        case contentGeneration
         case importedAt
         case lastOpenedAt
         case pendingClipPositionRevalidation
@@ -259,6 +263,7 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         mediaOverlayPreparationError = try container.decodeIfPresent(String.self, forKey: .mediaOverlayPreparationError)
         sourceFileSize = try container.decodeIfPresent(Int64.self, forKey: .sourceFileSize)
         sourceFileModifiedAt = try container.decodeIfPresent(Date.self, forKey: .sourceFileModifiedAt)
+        contentGeneration = try container.decodeIfPresent(UUID.self, forKey: .contentGeneration) ?? UUID()
         importedAt = try container.decode(Date.self, forKey: .importedAt)
         lastOpenedAt = try container.decodeIfPresent(Date.self, forKey: .lastOpenedAt)
         pendingClipPositionRevalidation = try container.decodeIfPresent(Bool.self, forKey: .pendingClipPositionRevalidation) ?? false
@@ -289,6 +294,7 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         try container.encodeIfPresent(mediaOverlayPreparationError, forKey: .mediaOverlayPreparationError)
         try container.encodeIfPresent(sourceFileSize, forKey: .sourceFileSize)
         try container.encodeIfPresent(sourceFileModifiedAt, forKey: .sourceFileModifiedAt)
+        try container.encode(contentGeneration, forKey: .contentGeneration)
         try container.encode(importedAt, forKey: .importedAt)
         try container.encodeIfPresent(lastOpenedAt, forKey: .lastOpenedAt)
         try container.encode(pendingClipPositionRevalidation, forKey: .pendingClipPositionRevalidation)

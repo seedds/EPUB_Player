@@ -56,6 +56,7 @@ enum BookImportService {
         let mediaOverlayPreparationState: MediaOverlayPreparationState
         let mediaOverlayPreparationError: String?
         let fingerprint: SourceFileFingerprint
+        let contentGeneration: UUID
         /// Content-document hrefs from the new EPUB manifest, used to validate
         /// saved positions on reimport.
         let resourceHrefs: [String]
@@ -133,6 +134,11 @@ enum BookImportService {
             // already-staged file and cover instead of leaking them (the staged
             // `.import-*` file is dot-prefixed, so no sweep would reclaim it).
             try Task.checkCancellation()
+
+            if let existingBook {
+                await MediaOverlayPreparationCoordinator.shared.cancelAndWaitPreparation(for: existingBook.id)
+                try Task.checkCancellation()
+            }
 
             let book = try applyPreparedImport(
                 preparedImport,
@@ -289,6 +295,11 @@ enum BookImportService {
                         prepareTask.cancel()
                     }
 
+                    if let existingBook {
+                        await MediaOverlayPreparationCoordinator.shared.cancelAndWaitPreparation(for: existingBook.id)
+                        try Task.checkCancellation()
+                        try? BookAssetCacheService.removeOverlayArtifacts(for: existingBook.id)
+                    }
                     book = upsertBook(from: preparedImport, existingBook: existingBook, store: store)
 
                     overlayRetryIDs.insert(book.id)
@@ -418,6 +429,7 @@ enum BookImportService {
             existingBook.mediaOverlayPreparationError = preparedImport.mediaOverlayPreparationError
             existingBook.sourceFileSize = preparedImport.fingerprint.fileSize
             existingBook.sourceFileModifiedAt = preparedImport.fingerprint.modifiedAt
+            existingBook.contentGeneration = preparedImport.contentGeneration
             existingBook.importedAt = Date()
             // The file content changed (this branch only runs on a new
             // fingerprint). Rather than discard every saved position, keep the
@@ -445,7 +457,8 @@ enum BookImportService {
             mediaOverlayPreparationStateRawValue: preparedImport.mediaOverlayPreparationState.rawValue,
             mediaOverlayPreparationError: preparedImport.mediaOverlayPreparationError,
             sourceFileSize: preparedImport.fingerprint.fileSize,
-            sourceFileModifiedAt: preparedImport.fingerprint.modifiedAt
+            sourceFileModifiedAt: preparedImport.fingerprint.modifiedAt,
+            contentGeneration: preparedImport.contentGeneration
         )
         store.addBook(newBook)
         return newBook
@@ -590,6 +603,7 @@ enum BookImportService {
             mediaOverlayPreparationState: .pending,
             mediaOverlayPreparationError: nil,
             fingerprint: fingerprint,
+            contentGeneration: UUID(),
             resourceHrefs: contentResourceHrefs(from: package),
             stagedCoverFilename: stagedCoverFilename
         )
@@ -1185,6 +1199,7 @@ final class MediaOverlayPreparationCoordinator {
 
         book.mediaOverlayPreparationState = .processing
         book.mediaOverlayPreparationError = nil
+        let contentGeneration = book.contentGeneration
         publishProgress(
             PreparationProgress(fractionCompleted: 0, message: "Preparing read-aloud..."),
             for: bookID
@@ -1208,9 +1223,31 @@ final class MediaOverlayPreparationCoordinator {
                 return
             }
 
+            let stagedManifestURL: URL
+            do {
+                stagedManifestURL = try AppStorage.mediaOverlaysDirectory().appendingPathComponent(
+                    ".\(bookID.uuidString)-\(contentGeneration.uuidString).json",
+                    isDirectory: false
+                )
+            } catch {
+                guard self?.isCurrentGeneration(contentGeneration, for: bookID, store: store) == true else {
+                    return
+                }
+                book.mediaOverlayPreparationState = .failed
+                book.mediaOverlayPreparationError = error.localizedDescription
+                store.persistNow()
+                return
+            }
+            defer {
+                try? FileManager.default.removeItem(at: stagedManifestURL)
+            }
+
             do {
                 let progressHandler: @Sendable (EPUBMediaOverlayProgress) -> Void = { [weak self] progress in
                     DispatchQueue.main.async {
+                        guard self?.isCurrentGeneration(contentGeneration, for: bookID, store: store) == true else {
+                            return
+                        }
                         self?.publishProgress(Self.preparationProgress(from: progress), for: bookID)
                     }
                 }
@@ -1220,6 +1257,7 @@ final class MediaOverlayPreparationCoordinator {
                     try await EPUBMediaOverlayService.parseAndWrite(
                         at: sourceURL,
                         bookID: bookID,
+                        destinationURL: stagedManifestURL,
                         progressHandler: progressHandler
                     )
                 }
@@ -1229,11 +1267,20 @@ final class MediaOverlayPreparationCoordinator {
                     parseTask.cancel()
                 }
 
-                guard let updatedBook = self?.fetchBook(id: bookID, store: store) else {
+                guard !Task.isCancelled,
+                      self?.isCurrentGeneration(contentGeneration, for: bookID, store: store) == true,
+                      let updatedBook = self?.fetchBook(id: bookID, store: store)
+                else {
                     return
                 }
 
-                updatedBook.mediaOverlayJSONPath = result?.jsonURL.lastPathComponent
+                if result != nil {
+                    let finalManifestURL = try AppStorage.mediaOverlayManifestURL(for: bookID)
+                    let data = try Data(contentsOf: stagedManifestURL)
+                    try data.write(to: finalManifestURL, options: .atomic)
+                }
+
+                updatedBook.mediaOverlayJSONPath = result == nil ? nil : try AppStorage.mediaOverlayManifestURL(for: bookID).lastPathComponent
                 updatedBook.mediaOverlayActiveClass = result?.manifest.activeClass
                 updatedBook.mediaOverlayDuration = result?.manifest.duration
                 updatedBook.mediaOverlayClipCount = result?.manifest.clipCount
@@ -1250,7 +1297,10 @@ final class MediaOverlayPreparationCoordinator {
                 )
                 store.persistNow()
             } catch {
-                guard let updatedBook = self?.fetchBook(id: bookID, store: store) else {
+                guard !Task.isCancelled,
+                      self?.isCurrentGeneration(contentGeneration, for: bookID, store: store) == true,
+                      let updatedBook = self?.fetchBook(id: bookID, store: store)
+                else {
                     return
                 }
 
@@ -1292,6 +1342,15 @@ final class MediaOverlayPreparationCoordinator {
     func cancelPreparation(for bookID: UUID) {
         tasks[bookID]?.cancel()
         tasks.removeValue(forKey: bookID)
+    }
+
+    func cancelAndWaitPreparation(for bookID: UUID) async {
+        guard let task = tasks[bookID] else {
+            return
+        }
+        task.cancel()
+        await task.value
+        clearTaskEntryIfCurrent(for: bookID, task: task)
     }
 
     /// Removes the map entry for `bookID` only when it still holds `task`. A
@@ -1351,6 +1410,10 @@ final class MediaOverlayPreparationCoordinator {
 
     private func fetchBook(id: UUID, store: AppStateStore) -> Book? {
         store.book(withID: id)
+    }
+
+    private func isCurrentGeneration(_ generation: UUID, for bookID: UUID, store: AppStateStore) -> Bool {
+        fetchBook(id: bookID, store: store)?.contentGeneration == generation
     }
 
     @discardableResult
@@ -1437,6 +1500,10 @@ extension MediaOverlayPreparationCoordinator {
         tasks.removeAll()
         progressSnapshots.removeAll()
         progressObservers.removeAll()
+    }
+
+    func test_isCurrentGeneration(_ generation: UUID, for bookID: UUID, store: AppStateStore) -> Bool {
+        isCurrentGeneration(generation, for: bookID, store: store)
     }
 
     /// Cancels and drains all in-flight preparation work. Used by tests that
