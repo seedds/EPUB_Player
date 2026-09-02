@@ -64,12 +64,36 @@ final class AppStorageTests: XCTestCase {
         }
     }
 
-    func testBookFileURLEmptyPathReturnsBase() throws {
-        let url = try AppStorage.bookFileURL(storedPath: "")
-        XCTAssertEqual(
-            url.standardizedFileURL.path,
-            try AppStorage.documentsDirectory().standardizedFileURL.path
-        )
+    func testBookFileURLRejectsPathsThatAreNotSingleEPUBsInBooks() {
+        for storedPath in ["", "Books", "Cache", "Books/nested/example.epub", "Books/example.txt"] {
+            XCTAssertThrowsError(try AppStorage.bookFileURL(storedPath: storedPath), storedPath)
+        }
+    }
+
+    func testCustomFontFileURLRejectsTraversalAndInvalidFilenames() {
+        for storedFilename in ["", "../state.json", "../../Books/book.epub", "nested/font.ttf", "font.epub"] {
+            XCTAssertThrowsError(try AppStorage.customFontFileURL(storedFilename: storedFilename), storedFilename)
+        }
+    }
+
+    func testCustomFontFileURLAcceptsStoredFontBasename() throws {
+        let url = try AppStorage.customFontFileURL(storedFilename: "8EE786B4-D1D9-4BD8-9D36-C2E3B44AFA5D.ttf")
+        XCTAssertEqual(url.deletingLastPathComponent(), try AppStorage.customFontsDirectory())
+        XCTAssertEqual(url.lastPathComponent, "8EE786B4-D1D9-4BD8-9D36-C2E3B44AFA5D.ttf")
+    }
+
+    func testStoredFileResolversRejectSymbolicLinks() throws {
+        let outsideURL = try AppStorage.documentsDirectory().appendingPathComponent("outside.epub", isDirectory: false)
+        try Data("outside".utf8).write(to: outsideURL)
+
+        let bookLink = try AppStorage.booksDirectory().appendingPathComponent("linked.epub", isDirectory: false)
+        try FileManager.default.createSymbolicLink(at: bookLink, withDestinationURL: outsideURL)
+        XCTAssertThrowsError(try AppStorage.bookFileURL(storedPath: "Books/linked.epub"))
+
+        let fontLinkName = "8EE786B4-D1D9-4BD8-9D36-C2E3B44AFA5D.ttf"
+        let fontLink = try AppStorage.customFontsDirectory().appendingPathComponent(fontLinkName, isDirectory: false)
+        try FileManager.default.createSymbolicLink(at: fontLink, withDestinationURL: outsideURL)
+        XCTAssertThrowsError(try AppStorage.customFontFileURL(storedFilename: fontLinkName))
     }
 
     // MARK: - cover / overlay resolvers

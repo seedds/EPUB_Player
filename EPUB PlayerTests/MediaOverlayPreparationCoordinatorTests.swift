@@ -58,4 +58,25 @@ final class MediaOverlayPreparationCoordinatorTests: XCTestCase {
             "The current task's cleanup must clear its own map entry"
         )
     }
+
+    func testStaleContentGenerationCannotPublishPreparationResult() {
+        let store = AppStateStore()
+        let originalGeneration = UUID()
+        let book = Book(
+            title: "Book",
+            originalFilename: "book.epub",
+            epubFilePath: "Books/book.epub",
+            contentGeneration: originalGeneration
+        )
+        store.addBook(book)
+
+        XCTAssertTrue(coordinator.test_isCurrentGeneration(originalGeneration, for: book.id, store: store))
+
+        book.contentGeneration = UUID()
+
+        XCTAssertFalse(
+            coordinator.test_isCurrentGeneration(originalGeneration, for: book.id, store: store),
+            "Preparation started for replaced content must not publish into the current book"
+        )
+    }
 }

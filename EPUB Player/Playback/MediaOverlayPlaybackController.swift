@@ -154,6 +154,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
     /// routes through this closure instead of materializing the asset from disk,
     /// allowing tests to inject delays and reproduce stale-start races.
     private var audioURLResolverOverride: ((String) async throws -> URL)?
+    private var clipsResolverOverride: ((URL) async throws -> [EPUBMediaOverlayClip])?
 
     // Player, observers, and remote-command targets live in this holder so the
     // nonisolated deinit can clean them up without reading isolated state.
@@ -217,6 +218,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
     private var currentBookAuthor: String?
     private var currentBookCoverURL: URL?
     private var currentTransitionID: Int?
+    private var loadGeneration = 0
     private var startTask: Task<Void, Never>?
     private var updateNowPlayingTask: Task<Void, Never>?
     private var jumpAvailabilityRefreshTask: Task<Void, Never>?
@@ -241,6 +243,8 @@ final class MediaOverlayPlaybackController: ObservableObject {
     }
 
     func load(for book: Book, from jsonURL: URL?) async {
+        loadGeneration += 1
+        let generation = loadGeneration
         stop(reason: "load")
         cachedAudioDurations = [:]
         cachedNarratedTimeline = nil
@@ -274,14 +278,26 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
 
         do {
-            clips = try await Task.detached(priority: .userInitiated) {
-                try Self.resolvedClips(from: jsonURL)
-            }.value
+            let loadedClips: [EPUBMediaOverlayClip]
+            if let clipsResolverOverride {
+                loadedClips = try await clipsResolverOverride(jsonURL)
+            } else {
+                loadedClips = try await Task.detached(priority: .userInitiated) {
+                    try Self.resolvedClips(from: jsonURL)
+                }.value
+            }
+            guard generation == loadGeneration else {
+                return
+            }
+            clips = loadedClips
             currentClipIndex = nil
             state = clips.isEmpty ? .unavailable : .ready
             clearNowPlayingInfo()
             scheduleRefreshJumpAvailability()
         } catch {
+            guard generation == loadGeneration else {
+                return
+            }
             clips = []
             currentClipIndex = nil
             state = .failed(error.localizedDescription)
@@ -1386,6 +1402,12 @@ extension MediaOverlayPlaybackController {
         self.audioURLResolverOverride = audioURLResolver
         self.currentClipIndex = nil
         self.state = clips.isEmpty ? .unavailable : .ready
+    }
+
+    func configureClipsResolverForTesting(
+        _ resolver: @escaping (URL) async throws -> [EPUBMediaOverlayClip]
+    ) {
+        clipsResolverOverride = resolver
     }
 
     var test_loadedAudioPath: String? { loadedAudioPath }

@@ -114,4 +114,34 @@ final class CustomFontStoreTests: XCTestCase {
         XCTAssertTrue(remainingFiles.isEmpty, "A failed batch import must not orphan files copied in earlier iterations")
         XCTAssertTrue(store.customFontFamilies.isEmpty, "No families should be recorded for a failed import")
     }
+
+    func testRemovingMalformedPersistedFontRecordCannotDeleteBook() throws {
+        let store = AppStateStore()
+        let booksDirectory = try AppStorage.booksDirectory()
+        let victimURL = booksDirectory.appendingPathComponent("victim.epub", isDirectory: false)
+        try Data("book".utf8).write(to: victimURL)
+        let fileID = UUID()
+        let familyID = UUID()
+        let family = CustomFontStore.ImportedFontFamily(
+            id: familyID,
+            displayName: "Malicious",
+            fontFamily: "Malicious",
+            importedAt: Date(),
+            files: [CustomFontStore.ImportedFontFile(
+                id: fileID,
+                storedFilename: "../../Books/victim.epub",
+                originalFilename: "victim.ttf",
+                style: .normal,
+                importedAt: Date()
+            )]
+        )
+        store.setCustomFontFamilies([family])
+
+        try CustomFontStore.removeFamilies(withIDs: [familyID], store: store)
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: victimURL.path),
+            "A malformed persisted font path must never delete a file outside Fonts"
+        )
+    }
 }

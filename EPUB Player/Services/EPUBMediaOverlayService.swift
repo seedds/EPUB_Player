@@ -116,6 +116,7 @@ enum EPUBMediaOverlayService {
     nonisolated static func parseAndWrite(
         at epubURL: URL,
         bookID: UUID,
+        destinationURL: URL? = nil,
         progressHandler: ((EPUBMediaOverlayProgress) -> Void)? = nil
     ) async throws -> EPUBMediaOverlayParseResult? {
         reportProgress(
@@ -146,7 +147,7 @@ enum EPUBMediaOverlayService {
             return nil
         }
 
-        let jsonURL = try AppStorage.mediaOverlayManifestURL(for: bookID)
+        let jsonURL = try destinationURL ?? AppStorage.mediaOverlayManifestURL(for: bookID)
         let encoder = JSONEncoder()
         reportProgress(
             EPUBMediaOverlayProgress(fractionCompleted: 0.95, message: "Writing read-aloud data..."),

@@ -566,6 +566,7 @@ final class BookImportServiceTests: XCTestCase {
         let firstURL = try makeEPUBFile(named: "book.epub", title: "First Edition")
         let firstImport = try await BookImportService.importBook(from: firstURL, filename: "book.epub", store: store)
         let original = try XCTUnwrap(firstImport)
+        let originalGeneration = original.contentGeneration
         original.lastLocatorJSON = "{\"href\":\"/old\"}"
 
         // Skip strategy: re-importing the same unchanged file returns nil.
@@ -590,6 +591,7 @@ final class BookImportServiceTests: XCTestCase {
 
         let overwritten = try XCTUnwrap(replaced)
         XCTAssertEqual(overwritten.id, original.id, "Overwrite must preserve the book's identity")
+        XCTAssertNotEqual(overwritten.contentGeneration, originalGeneration, "Overwrite must begin a new content generation")
         XCTAssertEqual(overwritten.title, "Second Edition")
         XCTAssertNil(overwritten.lastLocatorJSON, "Positions saved against the old content are invalid")
         XCTAssertEqual(store.books.count, 1)
