@@ -84,8 +84,29 @@ private struct PersistedAppState: Codable {
         case booksSortOptionRawValue
     }
 
-    // Tolerates missing keys and corrupt entries so a schema change or one bad
-    // record never resets the whole library.
+    static let `default` = PersistedAppState(
+        books: [],
+        customFontFamilies: [],
+        fontSize: ReaderSettings.defaultFontSize,
+        lineHeight: ReaderSettings.defaultLineHeight,
+        fontFamilyRawValue: "Literata",
+        themeRawValue: AppThemeOption.system.rawValue,
+        readAloudColorRawValue: ReaderSettings.defaultReadAloudColorHex,
+        readingBackgroundRawValue: ReaderSettings.defaultReadingBackgroundRawValue,
+        playbackSpeed: ReaderSettings.defaultPlaybackSpeed,
+        playbackJumpInterval: ReaderSettings.defaultPlaybackJumpInterval,
+        autoRewindAfterBackgroundMinutes: ReaderSettings.defaultAutoRewindAfterBackgroundMinutes,
+        uploadServerPort: ReaderSettings.defaultUploadServerPort,
+        uploadServerRequiresPassword: false,
+        uploadServerPassword: "",
+        booksSortOptionRawValue: BooksSortOption.recentlyAdded.rawValue
+    )
+}
+
+extension PersistedAppState {
+    // Custom decoding lives in an extension so the memberwise initializer stays
+    // synthesized. Tolerates missing keys and corrupt entries so a schema change
+    // or one bad record never resets the whole library.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = PersistedAppState.default
@@ -110,58 +131,6 @@ private struct PersistedAppState: Codable {
         uploadServerPassword = container.decodeValue(String.self, forKey: .uploadServerPassword, default: defaults.uploadServerPassword)
         booksSortOptionRawValue = container.decodeValue(String.self, forKey: .booksSortOptionRawValue, default: defaults.booksSortOptionRawValue)
     }
-
-    init(
-        books: [Book],
-        customFontFamilies: [CustomFontStore.ImportedFontFamily],
-        fontSize: Double,
-        lineHeight: Double,
-        fontFamilyRawValue: String,
-        themeRawValue: String,
-        readAloudColorRawValue: String,
-        readingBackgroundRawValue: String,
-        playbackSpeed: Double,
-        playbackJumpInterval: Double,
-        autoRewindAfterBackgroundMinutes: Int?,
-        uploadServerPort: Int,
-        uploadServerRequiresPassword: Bool,
-        uploadServerPassword: String,
-        booksSortOptionRawValue: String
-    ) {
-        self.books = books
-        self.customFontFamilies = customFontFamilies
-        self.fontSize = fontSize
-        self.lineHeight = lineHeight
-        self.fontFamilyRawValue = fontFamilyRawValue
-        self.themeRawValue = themeRawValue
-        self.readAloudColorRawValue = readAloudColorRawValue
-        self.readingBackgroundRawValue = readingBackgroundRawValue
-        self.playbackSpeed = playbackSpeed
-        self.playbackJumpInterval = playbackJumpInterval
-        self.autoRewindAfterBackgroundMinutes = autoRewindAfterBackgroundMinutes
-        self.uploadServerPort = uploadServerPort
-        self.uploadServerRequiresPassword = uploadServerRequiresPassword
-        self.uploadServerPassword = uploadServerPassword
-        self.booksSortOptionRawValue = booksSortOptionRawValue
-    }
-
-    static let `default` = PersistedAppState(
-        books: [],
-        customFontFamilies: [],
-        fontSize: ReaderSettings.defaultFontSize,
-        lineHeight: ReaderSettings.defaultLineHeight,
-        fontFamilyRawValue: "Literata",
-        themeRawValue: AppThemeOption.system.rawValue,
-        readAloudColorRawValue: ReaderSettings.defaultReadAloudColorHex,
-        readingBackgroundRawValue: ReaderSettings.defaultReadingBackgroundRawValue,
-        playbackSpeed: ReaderSettings.defaultPlaybackSpeed,
-        playbackJumpInterval: ReaderSettings.defaultPlaybackJumpInterval,
-        autoRewindAfterBackgroundMinutes: ReaderSettings.defaultAutoRewindAfterBackgroundMinutes,
-        uploadServerPort: ReaderSettings.defaultUploadServerPort,
-        uploadServerRequiresPassword: false,
-        uploadServerPassword: "",
-        booksSortOptionRawValue: BooksSortOption.recentlyAdded.rawValue
-    )
 }
 
 private enum PersistedAppStateLoadResult {
@@ -172,7 +141,7 @@ private enum PersistedAppStateLoadResult {
 
 @MainActor
 final class AppStateStore: ObservableObject {
-    @Published private(set) var books: [Book] = []
+    @Published private(set) var books: [Book] = [] { didSet { invalidateSortedBooks() } }
     @Published private(set) var customFontFamilies: [CustomFontStore.ImportedFontFamily] = []
     @Published var fontSize = ReaderSettings.defaultFontSize { didSet { scheduleSave() } }
     @Published var lineHeight = ReaderSettings.defaultLineHeight { didSet { scheduleSave() } }
@@ -186,7 +155,18 @@ final class AppStateStore: ObservableObject {
     @Published var uploadServerPort = ReaderSettings.defaultUploadServerPort { didSet { scheduleSave() } }
     @Published var uploadServerRequiresPassword = false { didSet { scheduleSave() } }
     @Published var uploadServerPassword = "" { didSet { scheduleSave() } }
-    @Published var booksSortOption = BooksSortOption.recentlyAdded { didSet { scheduleSave() } }
+    @Published var booksSortOption = BooksSortOption.recentlyAdded {
+        didSet {
+            invalidateSortedBooks()
+            scheduleSave()
+        }
+    }
+
+    /// Cached `sortedBooks`, recomputed only when `books` or `booksSortOption`
+    /// change. `BooksView.body` re-evaluates on every book mutation (each
+    /// location tick), so sorting the whole library there — with
+    /// `localizedCaseInsensitiveCompare` — was per-scroll-tick work.
+    private var cachedSortedBooks: [Book]?
 
     private var bookSubscriptions: [UUID: AnyCancellable] = [:]
     private var saveTask: Task<Void, Never>?
@@ -214,9 +194,18 @@ final class AppStateStore: ObservableObject {
     }
 
     var sortedBooks: [Book] {
-        books.sorted { lhs, rhs in
+        if let cachedSortedBooks {
+            return cachedSortedBooks
+        }
+        let sorted = books.sorted { lhs, rhs in
             isOrderedBefore(lhs, rhs, for: booksSortOption)
         }
+        cachedSortedBooks = sorted
+        return sorted
+    }
+
+    private func invalidateSortedBooks() {
+        cachedSortedBooks = nil
     }
 
     func replaceBooks(_ books: [Book]) {
@@ -358,6 +347,9 @@ final class AppStateStore: ObservableObject {
             // synchronously lets SwiftUI coalesce the invalidation with the
             // mutation instead of deferring it a runloop turn.
             MainActor.assumeIsolated {
+                // A book's own fields (title/author) feed the sort, so an
+                // in-place mutation must drop the cached order too.
+                self?.invalidateSortedBooks()
                 self?.objectWillChange.send()
                 self?.scheduleSave()
             }

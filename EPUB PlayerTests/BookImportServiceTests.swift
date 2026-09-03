@@ -672,6 +672,71 @@ final class BookImportServiceTests: XCTestCase {
         XCTAssertEqual(store.books.map(\.title), ["Dropped In"], "Missing book removed, new book imported, broken file skipped")
     }
 
+    // MARK: - Refresh renames unsanitised drops and keeps their covers (A1+A2)
+
+    /// A Files-app drop whose name contains characters outside the sanitised
+    /// set must be renamed to its sanitised destination on refresh, keep its
+    /// cover, and leave no staged leftovers — previously refresh recorded the
+    /// unsanitised name (a path that could not be opened) and dropped the cover.
+    func testRefreshRenamesUnsanitisedDropAndKeepsCover() async throws {
+        let booksDirectory = try AppStorage.booksDirectory()
+
+        // `'` is outside the allowed set, so this sanitises to `Don-t Panic.epub`.
+        let droppedName = "Don't Panic.epub"
+        let sanitisedName = AppStorage.sanitizedFilename(droppedName)
+        XCTAssertNotEqual(droppedName, sanitisedName)
+
+        let source = try makeEPUBFileWithCover(named: "src.epub", title: "Hitchhiker", coverBytes: [0x89, 0x50, 0x4E, 0x47, 7])
+        try FileManager.default.copyItem(
+            at: source,
+            to: booksDirectory.appendingPathComponent(droppedName, isDirectory: false)
+        )
+
+        let refreshed = try await BookImportService.refreshBooksFromDocuments(store: store)
+        let book = try XCTUnwrap(refreshed.first)
+        let recordID = book.id
+
+        // File renamed to the sanitised destination, no unsanitised original,
+        // no staged leftovers, and the record opens.
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: booksDirectory.appendingPathComponent(sanitisedName).path),
+            "Refresh must rename the drop to its sanitised name"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: booksDirectory.appendingPathComponent(droppedName).path),
+            "The unsanitised original must not remain"
+        )
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: booksDirectory.path)
+            .filter { $0.hasPrefix(BookImportService.stagedImportPrefix) }
+        XCTAssertTrue(leftovers.isEmpty, "Refresh must not leave staged files: \(leftovers)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try book.resolvedEPUBFileURL().path))
+
+        // Cover committed.
+        let coverURL = try XCTUnwrap(try book.resolvedCoverImageURL())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: coverURL.path), "Refresh must commit the cover")
+
+        // A second refresh changes nothing: same record, same file.
+        _ = try await BookImportService.refreshBooksFromDocuments(store: store)
+        XCTAssertEqual(store.books.map(\.id), [recordID], "A second refresh must be a no-op")
+    }
+
+    /// Two on-disk names that sanitise to the same destination: one is imported,
+    /// the other is skipped rather than clobbering the first.
+    func testRefreshSkipsSecondFileThatSanitisesToSameName() async throws {
+        let booksDirectory = try AppStorage.booksDirectory()
+
+        // Both sanitise to `A-B.epub` (the disallowed char becomes `-`).
+        let first = try makeEPUBFile(named: "first.epub", title: "First Colliding")
+        let second = try makeEPUBFile(named: "second.epub", title: "Second Colliding")
+        try FileManager.default.copyItem(at: first, to: booksDirectory.appendingPathComponent("A'B.epub"))
+        try FileManager.default.copyItem(at: second, to: booksDirectory.appendingPathComponent("A#B.epub"))
+        XCTAssertEqual(AppStorage.sanitizedFilename("A'B.epub"), AppStorage.sanitizedFilename("A#B.epub"))
+
+        let refreshed = try await BookImportService.refreshBooksFromDocuments(store: store)
+        XCTAssertEqual(refreshed.count, 1, "Only one of two colliding names may import")
+        XCTAssertEqual(store.books.count, 1)
+    }
+
     func testProgressReporting() async throws {
         let sourceURL = try makeEPUBFile(named: "progress.epub", title: "Progress Book")
 

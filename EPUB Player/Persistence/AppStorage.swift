@@ -73,6 +73,32 @@ enum AppStorage {
         try ensureDirectory(cacheDirectory().appendingPathComponent("Covers", isDirectory: true))
     }
 
+    /// The covers directory URL *without* creating it. Read paths (resolving a
+    /// stored cover URL) run per visible library row per `body` pass; forcing a
+    /// `createDirectory` syscall there was a per-row main-thread cost.
+    nonisolated static func coversDirectoryURL() throws -> URL {
+        try documentsDirectoryURL()
+            .appendingPathComponent("Cache", isDirectory: true)
+            .appendingPathComponent("Covers", isDirectory: true)
+    }
+
+    /// The documents directory URL without creating it (release build).
+    private nonisolated static func documentsDirectoryURL() throws -> URL {
+        #if DEBUG
+        if let overridePath = ProcessInfo.processInfo.environment["EPUBPLAYER_DOCUMENTS_DIRECTORY"],
+           !overridePath.isEmpty {
+            return URL(fileURLWithPath: overridePath, isDirectory: true)
+        }
+        #endif
+
+        return try FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        )
+    }
+
     nonisolated static func mediaOverlaysDirectory() throws -> URL {
         try ensureDirectory(cacheDirectory().appendingPathComponent("MediaOverlays", isDirectory: true))
     }

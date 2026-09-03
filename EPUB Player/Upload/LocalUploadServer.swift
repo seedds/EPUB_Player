@@ -92,7 +92,7 @@ final class LocalUploadServer {
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: HTTPUploadConnection] = [:]
 
-    init(port: UInt16 = 80, authConfig: UploadServerAuthConfig = .open) {
+    init(port: UInt16, authConfig: UploadServerAuthConfig = .open) {
         self.port = port
         self.authConfig = authConfig
         queue.setSpecific(key: queueKey, value: ())

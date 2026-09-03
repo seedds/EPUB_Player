@@ -120,11 +120,6 @@ nonisolated enum ReaderSettings {
         return normalized == 1 ? "1 min" : "\(normalized) min"
     }
 
-    static func playbackJumpLabel(_ value: Double, direction: PlaybackJumpDirection) -> String {
-        let prefix = direction == .backward ? "-" : "+"
-        return "\(prefix)\(playbackJumpIntervalText(value))"
-    }
-
     static func playbackJumpSymbolName(_ value: Double, direction: PlaybackJumpDirection) -> String {
         let wholeSeconds = Int(normalizedPlaybackJumpInterval(value).rounded())
         switch direction {
@@ -155,37 +150,6 @@ nonisolated enum ReaderSettings {
             .formatted(.number.precision(.fractionLength(1)))
     }
 
-    static func uiColor(from rawValue: String) -> UIColor {
-        ReadAloudColor.uiColor(from: rawValue)
-    }
-
-    static func color(from rawValue: String) -> SwiftUI.Color {
-        ReadAloudColor.color(from: rawValue)
-    }
-
-    static func readAloudColorHex(from color: SwiftUI.Color) -> String {
-        ReadAloudColor.hex(from: color)
-    }
-
-    static func readAloudColorText(from rawValue: String) -> String {
-        ReadAloudColor.text(from: rawValue)
-    }
-
-    static func normalizedReadAloudColorText(_ value: String) -> String {
-        ReadAloudColor.normalizedText(value)
-    }
-
-    static func readAloudColorHex(from text: String) -> String? {
-        ReadAloudColor.hex(from: text)
-    }
-
-    static func readAloudColorHSB(from rawValue: String) -> ReadAloudColorHSB {
-        ReadAloudColor.hsb(from: rawValue)
-    }
-
-    static func readAloudColorHex(hue: Double, saturation: Double, brightness: Double) -> String {
-        ReadAloudColor.hex(hue: hue, saturation: saturation, brightness: brightness)
-    }
 }
 
 enum ReadingBackgroundOption: String, CaseIterable, Identifiable {
@@ -248,7 +212,7 @@ enum ReadingBackgroundOption: String, CaseIterable, Identifiable {
 
     /// Swatch color shown in selection UI.
     var swatchColor: SwiftUI.Color {
-        ReaderSettings.color(from: backgroundHex)
+        ReadAloudColor.color(from: backgroundHex)
     }
 }
 

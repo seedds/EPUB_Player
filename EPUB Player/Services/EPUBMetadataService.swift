@@ -52,10 +52,7 @@ struct EPUBPackageInfo {
     var language: String?
     var identifier: String?
     var coverItemId: String?
-    var mediaActiveClass: String?
-    var mediaPlaybackActiveClass: String?
     var mediaDuration: Double?
-    var mediaNarrator: String?
     var manifestItems: [ManifestItem] = []
     /// Manifest item ids in `<spine>` (`itemref`) order. The spine — not the
     /// manifest — defines reading order, so this drives media-overlay document
@@ -69,10 +66,7 @@ struct EPUBPackageInfo {
         language: String? = nil,
         identifier: String? = nil,
         coverItemId: String? = nil,
-        mediaActiveClass: String? = nil,
-        mediaPlaybackActiveClass: String? = nil,
         mediaDuration: Double? = nil,
-        mediaNarrator: String? = nil,
         manifestItems: [ManifestItem] = [],
         spineItemRefs: [String] = []
     ) {
@@ -82,10 +76,7 @@ struct EPUBPackageInfo {
         self.language = language
         self.identifier = identifier
         self.coverItemId = coverItemId
-        self.mediaActiveClass = mediaActiveClass
-        self.mediaPlaybackActiveClass = mediaPlaybackActiveClass
         self.mediaDuration = mediaDuration
-        self.mediaNarrator = mediaNarrator
         self.manifestItems = manifestItems
         self.spineItemRefs = spineItemRefs
     }
@@ -122,15 +113,6 @@ struct EPUBArchiveAsset {
 enum EPUBMetadataService {
     nonisolated private static var virtualRootURL: URL {
         URL(fileURLWithPath: "/virtual-epub-root", isDirectory: true)
-    }
-
-    nonisolated static func metadata(at epubURL: URL) async throws -> EPUBMetadata {
-        let archive = try await EPUBArchive(url: epubURL)
-        guard let package = try await packageInfo(in: archive) else {
-            return EPUBMetadata()
-        }
-
-        return metadata(from: package)
     }
 
     nonisolated static func metadata(from package: EPUBPackageInfo) -> EPUBMetadata {
@@ -283,22 +265,13 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
             if attributeDict["name"] == "cover", let content = attributeDict["content"] {
                 package.coverItemId = content
             }
-            if attributeDict["property"] == "media:active-class" {
-                currentMetadataElement = "media:active-class"
-                currentText = ""
-            } else if attributeDict["property"] == "media:playback-active-class" {
-                currentMetadataElement = "media:playback-active-class"
-                currentText = ""
-            } else if attributeDict["property"] == "media:duration" {
+            if attributeDict["property"] == "media:duration" {
                 // A refines-scoped duration belongs to one SMIL document; only
                 // the unrefined meta is the publication total.
                 if attributeDict["refines"] == nil {
                     currentMetadataElement = "media:duration"
                     currentText = ""
                 }
-            } else if attributeDict["property"] == "media:narrator" {
-                currentMetadataElement = "media:narrator"
-                currentText = ""
             }
 
         case "item":
@@ -349,14 +322,8 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
                 package.language = text
             case "identifier" where package.identifier == nil:
                 package.identifier = text
-            case "media:active-class":
-                package.mediaActiveClass = text
-            case "media:playback-active-class":
-                package.mediaPlaybackActiveClass = text
             case "media:duration":
                 package.mediaDuration = EPUBMediaOverlayTimeParser.seconds(from: text)
-            case "media:narrator":
-                package.mediaNarrator = text
             default:
                 break
             }

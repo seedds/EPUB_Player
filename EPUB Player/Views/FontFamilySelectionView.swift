@@ -36,7 +36,6 @@ struct ReaderSettingSliderRow: View {
 struct FontFamilySelectionList: View {
     let customFontFamilies: [CustomFontStore.ImportedFontFamily]
     @Binding var selectedFontFamilyRawValue: String
-    let onSelect: (() -> Void)?
     var showsSeparators = false
 
     var body: some View {
@@ -46,7 +45,6 @@ struct FontFamilySelectionList: View {
             VStack(spacing: 0) {
                 Button {
                     selectedFontFamilyRawValue = option.id
-                    onSelect?()
                 } label: {
                     HStack(spacing: 12) {
                         Text(option.name)
@@ -149,22 +147,5 @@ struct FontFamilySelectionList: View {
         }
 
         return UIFont.fontNames(forFamilyName: familyName).first
-    }
-}
-
-struct FontFamilySelectionView: View {
-    @Binding var selectedFontFamilyRawValue: String
-    let customFontFamilies: [CustomFontStore.ImportedFontFamily]
-
-    var body: some View {
-        List {
-            FontFamilySelectionList(
-                customFontFamilies: customFontFamilies,
-                selectedFontFamilyRawValue: $selectedFontFamilyRawValue,
-                onSelect: nil
-            )
-        }
-        .navigationTitle("Font Family")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }

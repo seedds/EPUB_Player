@@ -15,7 +15,6 @@ struct ContentView: View {
     @EnvironmentObject private var store: AppStateStore
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var uploadServer = UploadServerController()
-    @State private var hasResumedPendingMediaOverlayPreparation = false
 
     var body: some View {
         TabView {
@@ -36,10 +35,6 @@ struct ContentView: View {
         }
         .preferredColorScheme(ReaderSettings.appTheme(from: store.themeRawValue).preferredColorScheme)
         .task {
-            guard !hasResumedPendingMediaOverlayPreparation else {
-                return
-            }
-            hasResumedPendingMediaOverlayPreparation = true
             MediaOverlayPreparationCoordinator.shared.resumePendingBooks(store: store)
         }
         .task(id: scenePhase) {
@@ -331,6 +326,11 @@ private struct BookRow: View {
     @ObservedObject var book: Book
     let showsTopSeparator: Bool
 
+    /// Reading progress is parsed from the locator JSON, which is comparatively
+    /// costly. `body` re-evaluates on every book mutation (each location tick),
+    /// so cache it and recompute only when the locator string actually changes.
+    @State private var readingProgress: Double = 0
+
     var body: some View {
         VStack(spacing: 0) {
             if showsTopSeparator {
@@ -392,6 +392,9 @@ private struct BookRow: View {
                 .frame(height: 1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: book.lastLocatorJSON) {
+            readingProgress = Self.readingProgress(from: book.lastLocatorJSON)
+        }
     }
 
     /// The row's read-aloud badge, resolved once so the icon and the
@@ -433,8 +436,8 @@ private struct BookRow: View {
         return parts.joined(separator: ", ")
     }
 
-    private var readingProgress: Double {
-        guard let lastLocatorJSON = book.lastLocatorJSON,
+    private static func readingProgress(from lastLocatorJSON: String?) -> Double {
+        guard let lastLocatorJSON,
               let locator = try? Locator(jsonString: lastLocatorJSON)
         else {
             return 0
@@ -835,10 +838,14 @@ private struct SettingsView: View {
                     }
 
                     NavigationLink {
-                        FontFamilySelectionView(
-                            selectedFontFamilyRawValue: $store.fontFamilyRawValue,
-                            customFontFamilies: customFontFamilies
-                        )
+                        List {
+                            FontFamilySelectionList(
+                                customFontFamilies: customFontFamilies,
+                                selectedFontFamilyRawValue: $store.fontFamilyRawValue
+                            )
+                        }
+                        .navigationTitle("Font Family")
+                        .navigationBarTitleDisplayMode(.inline)
                         .toolbar(.hidden, for: .tabBar)
                     } label: {
                         SettingsNavigationRow(title: "Font Family") {
@@ -895,7 +902,7 @@ private struct SettingsView: View {
                     } label: {
                         SettingsNavigationRow(title: "Highlight Color") {
                             Circle()
-                                .fill(ReaderSettings.color(from: store.readAloudColorRawValue))
+                                .fill(ReadAloudColor.color(from: store.readAloudColorRawValue))
                                 .frame(width: 22, height: 22)
                                 .overlay {
                                     Circle()
@@ -1403,7 +1410,7 @@ private struct ReadAloudColorEditor: View {
                         colorHex = presetHex
                     } label: {
                         Circle()
-                            .fill(ReaderSettings.color(from: presetHex))
+                            .fill(ReadAloudColor.color(from: presetHex))
                             .frame(width: 30, height: 30)
                             .overlay {
                                 Circle()
@@ -1419,7 +1426,7 @@ private struct ReadAloudColorEditor: View {
 
             HStack(spacing: 18) {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(ReaderSettings.color(from: colorHex))
+                    .fill(ReadAloudColor.color(from: colorHex))
                     .frame(width: 72, height: 56)
                     .overlay {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -1437,18 +1444,18 @@ private struct ReadAloudColorEditor: View {
                         .autocorrectionDisabled()
                         .submitLabel(.done)
                         .onChange(of: hexText) { _, newValue in
-                            let normalized = ReaderSettings.normalizedReadAloudColorText(newValue)
+                            let normalized = ReadAloudColor.normalizedText(newValue)
                             if normalized != newValue {
                                 hexText = normalized
                                 return
                             }
 
-                            if let hex = ReaderSettings.readAloudColorHex(from: normalized) {
+                            if let hex = ReadAloudColor.hex(from: normalized) {
                                 colorHex = hex
                             }
                         }
                         .onSubmit {
-                            hexText = ReaderSettings.readAloudColorText(from: colorHex)
+                            hexText = ReadAloudColor.text(from: colorHex)
                         }
                 }
 
@@ -1468,15 +1475,15 @@ private struct ReadAloudColorEditor: View {
             .accessibilityLabel("sRGB Hex")
             .accessibilityValue(readAloudHexDisplay)
             .onTapGesture {
-                hexText = ReaderSettings.readAloudColorText(from: colorHex)
+                hexText = ReadAloudColor.text(from: colorHex)
             }
             Spacer(minLength: 0)
         }
         .onAppear {
-            hexText = ReaderSettings.readAloudColorText(from: colorHex)
+            hexText = ReadAloudColor.text(from: colorHex)
         }
         .onChange(of: colorHex) { _, newValue in
-            let normalized = ReaderSettings.readAloudColorText(from: newValue)
+            let normalized = ReadAloudColor.text(from: newValue)
             if normalized != hexText {
                 hexText = normalized
             }
@@ -1484,12 +1491,11 @@ private struct ReadAloudColorEditor: View {
     }
 
     private var colorHSB: ReadAloudColorHSB {
-        ReaderSettings.readAloudColorHSB(from: colorHex)
+        ReadAloudColor.hsb(from: colorHex)
     }
 
     private func updateSpectrumColor(hue: Double, saturation: Double, brightness: Double) {
-        colorHex = ReaderSettings.readAloudColorHex(
-            hue: hue,
+        colorHex = ReadAloudColor.hex(hue: hue,
             saturation: saturation,
             brightness: brightness
         )
@@ -1500,7 +1506,7 @@ private struct ReadAloudColorEditor: View {
     }
 
     private var readAloudHexDisplay: String {
-        "#\(ReaderSettings.readAloudColorText(from: colorHex))"
+        "#\(ReadAloudColor.text(from: colorHex))"
     }
 }
 
