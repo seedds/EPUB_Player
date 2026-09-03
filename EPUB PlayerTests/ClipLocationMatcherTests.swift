@@ -102,10 +102,8 @@ final class ClipLocationMatcherTests: XCTestCase {
         end: Double? = 1
     ) -> EPUBMediaOverlayClip {
         EPUBMediaOverlayClip(
-            textHref: fragmentID.map { "\(resource)#\($0)" } ?? resource,
             textResourceHref: resource,
             fragmentID: fragmentID,
-            audioHref: "audio.mp3",
             audioPath: "audio.mp3",
             clipBegin: begin,
             clipEnd: end

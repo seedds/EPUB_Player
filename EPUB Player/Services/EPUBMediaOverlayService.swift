@@ -18,22 +18,13 @@ nonisolated struct EPUBMediaOverlayProgress: Sendable {
 }
 
 nonisolated struct EPUBMediaOverlayManifest: Codable {
-    var activeClass: String?
-    var playbackActiveClass: String?
-    var narrator: String?
     var duration: Double?
     var documents: [EPUBMediaOverlayDocument]
 
     nonisolated init(
-        activeClass: String? = nil,
-        playbackActiveClass: String? = nil,
-        narrator: String? = nil,
         duration: Double? = nil,
         documents: [EPUBMediaOverlayDocument]
     ) {
-        self.activeClass = activeClass
-        self.playbackActiveClass = playbackActiveClass
-        self.narrator = narrator
         self.duration = duration
         self.documents = documents
     }
@@ -44,24 +35,16 @@ nonisolated struct EPUBMediaOverlayManifest: Codable {
 }
 
 nonisolated struct EPUBMediaOverlayDocument: Codable {
-    var smilHref: String
-    var smilPath: String
-    var associatedContentHref: String?
     var clips: [EPUBMediaOverlayClip]
 
-    nonisolated init(smilHref: String, smilPath: String, associatedContentHref: String?, clips: [EPUBMediaOverlayClip]) {
-        self.smilHref = smilHref
-        self.smilPath = smilPath
-        self.associatedContentHref = associatedContentHref
+    nonisolated init(clips: [EPUBMediaOverlayClip]) {
         self.clips = clips
     }
 }
 
 nonisolated struct EPUBMediaOverlayClip: Codable, Equatable {
-    var textHref: String
     var textResourceHref: String
     var fragmentID: String?
-    var audioHref: String
     var audioPath: String
     var clipBegin: Double
     var clipEnd: Double?
@@ -79,26 +62,17 @@ nonisolated struct EPUBMediaOverlayClip: Codable, Equatable {
     }
 
     nonisolated init(
-        textHref: String,
         textResourceHref: String,
         fragmentID: String?,
-        audioHref: String,
         audioPath: String,
         clipBegin: Double,
         clipEnd: Double?
     ) {
-        self.textHref = textHref
         self.textResourceHref = textResourceHref
         self.fragmentID = fragmentID
-        self.audioHref = audioHref
         self.audioPath = audioPath
         self.clipBegin = clipBegin
         self.clipEnd = clipEnd
-    }
-
-    nonisolated var duration: Double? {
-        guard let clipEnd else { return nil }
-        return max(0, clipEnd - clipBegin)
     }
 }
 
@@ -241,7 +215,6 @@ enum EPUBMediaOverlayService {
                 using: progressHandler
             )
 
-            let contentItem = candidate.contentItem
             let smilItem = candidate.smilItem
             guard let smilURL = EPUBMetadataService.resolvedURL(
                 for: smilItem.href,
@@ -256,12 +229,7 @@ enum EPUBMediaOverlayService {
                 continue
             }
 
-            documents.append(EPUBMediaOverlayDocument(
-                smilHref: relativePath(for: smilURL, root: root) ?? smilItem.href,
-                smilPath: smilURL.path,
-                associatedContentHref: contentItem?.href,
-                clips: clips
-            ))
+            documents.append(EPUBMediaOverlayDocument(clips: clips))
         }
 
         reportProgress(
@@ -274,9 +242,6 @@ enum EPUBMediaOverlayService {
         }
 
         return EPUBMediaOverlayManifest(
-            activeClass: package.mediaActiveClass,
-            playbackActiveClass: package.mediaPlaybackActiveClass,
-            narrator: package.mediaNarrator,
             duration: package.mediaDuration,
             documents: documents
         )
@@ -316,10 +281,6 @@ enum EPUBMediaOverlayService {
             }
             return lhs.offset < rhs.offset
         }.map(\.element)
-    }
-
-    nonisolated fileprivate static func relativePath(for url: URL, root: URL) -> String? {
-        AppStorage.relativePath(from: url.path, under: root.path)
     }
 
     nonisolated private static func reportProgress(
@@ -452,29 +413,26 @@ nonisolated private final class SMILParser: NSObject, XMLParserDelegate {
         }
 
         return EPUBMediaOverlayClip(
-            textHref: textReference.href,
             textResourceHref: textReference.resourceHref,
             fragmentID: textReference.fragmentID,
-            audioHref: audioReference.resourceHref,
             audioPath: audioReference.resourceHref,
             clipBegin: builder.clipBegin,
             clipEnd: builder.clipEnd
         )
     }
 
-    nonisolated private func resolveReference(_ href: String) -> (href: String, resourceHref: String, fragmentID: String?, fileURL: URL)? {
+    nonisolated private func resolveReference(_ href: String) -> (resourceHref: String, fragmentID: String?)? {
         let fragmentID = fragment(from: href)
         let smilDirectory = smilURL.deletingLastPathComponent()
         guard let fileURL = EPUBMetadataService.resolvedURL(
             for: hrefWithoutFragment(href),
             relativeTo: smilDirectory,
             root: rootURL
-        ), let resourceHref = EPUBMediaOverlayService.relativePath(for: fileURL, root: rootURL) else {
+        ), let resourceHref = AppStorage.relativePath(from: fileURL.path, under: rootURL.path) else {
             return nil
         }
 
-        let fullHref = fragmentID.map { "\(resourceHref)#\($0)" } ?? resourceHref
-        return (fullHref, resourceHref, fragmentID, fileURL)
+        return (resourceHref, fragmentID)
     }
 
     nonisolated private func fragment(from href: String) -> String? {

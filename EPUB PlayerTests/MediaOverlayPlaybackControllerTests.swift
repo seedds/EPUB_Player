@@ -27,10 +27,8 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
 
     private func makeClip(audioPath: String, fragmentID: String) -> EPUBMediaOverlayClip {
         EPUBMediaOverlayClip(
-            textHref: "chapter.xhtml#\(fragmentID)",
             textResourceHref: "chapter.xhtml",
             fragmentID: fragmentID,
-            audioHref: audioPath,
             audioPath: audioPath,
             clipBegin: 0,
             clipEnd: 1
@@ -44,10 +42,8 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
         clipEnd: Double
     ) -> EPUBMediaOverlayClip {
         EPUBMediaOverlayClip(
-            textHref: "chapter.xhtml#\(fragmentID)",
             textResourceHref: "chapter.xhtml",
             fragmentID: fragmentID,
-            audioHref: audioPath,
             audioPath: audioPath,
             clipBegin: clipBegin,
             clipEnd: clipEnd

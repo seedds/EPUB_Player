@@ -70,7 +70,6 @@ final class EPUBMediaOverlayServiceTests: XCTestCase {
 
         let manifest = try XCTUnwrap(result?.manifest)
         XCTAssertEqual(manifest.documents.count, 1)
-        XCTAssertEqual(manifest.activeClass, "-epub-media-overlay-active")
         // The refines-scoped duration must not overwrite the publication total.
         XCTAssertEqual(manifest.duration, 5.5)
 

@@ -9,28 +9,7 @@
 import Combine
 import Foundation
 import MediaPlayer
-import os
 import UIKit
-
-/// Lightweight wrapper around `OSSignposter` for measuring the cost of the
-/// pause/resume path. Signposts compile to near-nothing when Instruments is not
-/// recording, so this can live in the codebase permanently. Open the
-/// "com.epubplayer.playback" subsystem in Instruments' os_signpost instrument to
-/// inspect the named intervals (e.g. "pause.player", "pause.deactivate").
-enum PlaybackSignposter {
-    static let signposter = OSSignposter(
-        subsystem: "com.epubplayer.playback",
-        category: "pause"
-    )
-
-    /// Measures the synchronous body of `operation` as a signpost interval.
-    @discardableResult
-    static func measure<T>(_ name: StaticString, _ operation: () -> T) -> T {
-        let state = signposter.beginInterval(name)
-        defer { signposter.endInterval(name, state) }
-        return operation()
-    }
-}
 
 /// Owns the AVPlayer-, time-observer-, and remote-command resources that must
 /// be released on the main thread. Kept as a separate reference type so the
@@ -346,32 +325,24 @@ final class MediaOverlayPlaybackController: ObservableObject {
           // Urgent path: pause audio and flip state so the button repaints
           // immediately. Everything else is deferred off this run-loop turn so
           // it cannot stall the tap.
-          PlaybackSignposter.measure("pause.player") {
-              player?.pause()
-          }
+          player?.pause()
           currentTransitionID = nil
-          PlaybackSignposter.measure("pause.state") {
-              if clips.isEmpty {
-                  state = .unavailable
-              } else {
-                  state = .paused
-              }
+          if clips.isEmpty {
+              state = .unavailable
+          } else {
+              state = .paused
           }
 
           // An ordinary pause keeps the audio session active so resume is
           // instant; release it only after an idle timeout.
-          scheduleAudioSessionIdleDeactivation(reason: reason)
+          scheduleAudioSessionIdleDeactivation()
 
           // Non-urgent work: lock-screen metadata and jump availability. Hop to
           // the next main-actor turn so SwiftUI has already repainted the icon.
           Task { @MainActor [weak self] in
               guard let self else { return }
-              PlaybackSignposter.measure("pause.nowPlaying") {
-                  self.updateNowPlayingInfo(playbackRateOverride: 0)
-              }
-              PlaybackSignposter.measure("pause.jumpAvailability") {
-                  self.scheduleRefreshJumpAvailability()
-              }
+              self.updateNowPlayingInfo(playbackRateOverride: 0)
+              self.scheduleRefreshJumpAvailability()
           }
       }
 
@@ -381,13 +352,13 @@ final class MediaOverlayPlaybackController: ObservableObject {
         updateNowPlayingTask?.cancel()
         updateNowPlayingTask = nil
         player?.pause()
-        removeObservers(reason: "stop[\(reason)]")
+        removeObservers()
         if let player {
             removePeriodicTimeObserver(from: player)
         }
         player = nil
         loadedAudioPath = nil
-        deactivateAudioSession(reason: "stop[\(reason)]")
+        deactivateAudioSession()
         currentTransitionID = nil
         currentClipIndex = clips.isEmpty ? nil : currentClipIndex
         state = clips.isEmpty ? .unavailable : .ready
@@ -407,8 +378,8 @@ final class MediaOverlayPlaybackController: ObservableObject {
         let nextIndex = clips.index(after: currentClipIndex)
         guard clips.indices.contains(nextIndex) else {
             player?.pause()
-            removeObservers(reason: "nextClip.noNext[\(reason)]")
-            deactivateAudioSession(reason: "nextClip.noNext[\(reason)]")
+            removeObservers()
+            deactivateAudioSession()
             currentTransitionID = nil
             state = .ready
             clearNowPlayingInfo()
@@ -441,8 +412,8 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
         DebugLog.shared.log("[highlight] selectClip reason=\(reason) \(String(describing: currentClipIndex)) -> \(index) autoplay=\(autoplay) target=\(clips[index].identityKey)")
         player?.pause()
-        removeObservers(reason: "selectClip[\(reason)]")
-        deactivateAudioSession(reason: "selectClip[\(reason)]")
+        removeObservers()
+        deactivateAudioSession()
         currentTransitionID = nil
 
         currentClipIndex = index
@@ -460,7 +431,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
     func setPlaybackRate(_ rate: Double) {
         let normalizedRate = ReaderSettings.normalizedPlaybackSpeed(rate)
         playbackRate = normalizedRate
-        applyPlaybackRateIfNeeded(shouldUpdateActiveRate: state.isPlaying, reason: "setPlaybackRate")
+        applyPlaybackRateIfNeeded(shouldUpdateActiveRate: state.isPlaying)
         updateNowPlayingInfo(playbackRateOverride: state.isPlaying ? Float(normalizedRate) : 0)
     }
 
@@ -506,7 +477,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
     ///   - reason: Debug string for logging the playback trigger
     ///   - transitionID: Unique ID for this playback transition, used to invalidate stale callbacks
     private func start(_ clip: EPUBMediaOverlayClip, reason: String, transitionID: Int) {
-        removeObservers(reason: "start[\(reason)]")
+        removeObservers()
 
         // Silence the outgoing clip before doing anything that can fail or
         // suspend. The observers are gone as of the line above, so any audio
@@ -560,15 +531,10 @@ final class MediaOverlayPlaybackController: ObservableObject {
                     return
                 }
 
-                self.addObservers(for: clip, reason: reason, transitionID: transitionID)
+                self.addObservers(for: clip, transitionID: transitionID)
                 player.play()
                 self.state = .playing
-                self.applyPlaybackRateIfNeeded(
-                    player: player,
-                    shouldUpdateActiveRate: true,
-                    reason: "start[\(reason)]",
-                    transitionID: transitionID
-                )
+                self.applyPlaybackRateIfNeeded(player: player, shouldUpdateActiveRate: true)
                 self.updateNowPlayingInfo(playbackRateOverride: Float(self.playbackRate))
                 self.scheduleRefreshJumpAvailability()
             } catch {
@@ -636,12 +602,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }.value
     }
 
-    private func applyPlaybackRateIfNeeded(
-        player: AVPlayer? = nil,
-        shouldUpdateActiveRate: Bool,
-        reason: String,
-        transitionID: Int? = nil
-    ) {
+    private func applyPlaybackRateIfNeeded(player: AVPlayer? = nil, shouldUpdateActiveRate: Bool) {
         guard let player = player ?? self.player else {
             return
         }
@@ -871,7 +832,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
         currentClip == clip
     }
 
-    private func addObservers(for clip: EPUBMediaOverlayClip, reason: String, transitionID: Int) {
+    private func addObservers(for clip: EPUBMediaOverlayClip, transitionID: Int) {
         guard let player else { return }
 
         if let clipEnd = clip.clipEnd, clipEnd > clip.clipBegin {
@@ -954,7 +915,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
         scheduleRefreshJumpAvailability()
     }
 
-    private func removeObservers(reason: String) {
+    private func removeObservers() {
         if let boundaryObserver, let player {
             player.removeTimeObserver(boundaryObserver)
         }
@@ -1000,12 +961,12 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
 
         DebugLog.shared.log("[highlight] continueSameAudioWithoutSeek reason=\(reason) \(fromIndex) -> \(toIndex) target=\(nextClip.identityKey)")
-        removeObservers(reason: "continueSameAudioWithoutSeek[\(reason)]")
+        removeObservers()
         currentClipIndex = toIndex
 
         let transitionID = nextPlaybackTransitionID()
         currentTransitionID = transitionID
-        addObservers(for: nextClip, reason: "continueSameAudioWithoutSeek[\(reason)]", transitionID: transitionID)
+        addObservers(for: nextClip, transitionID: transitionID)
         state = .playing
         updateNowPlayingInfo(playbackRateOverride: Float(playbackRate))
         scheduleRefreshJumpAvailability()
@@ -1037,8 +998,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
 
     private func updateNowPlayingInfo(playbackRateOverride: Float? = nil) {
         guard let clip = currentClip,
-              let clipIndex = currentClipIndex,
-              let clipID = clipIdentity(for: clip)
+              let clipIndex = currentClipIndex
         else {
             clearNowPlayingInfo()
             return
@@ -1051,7 +1011,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
         updateNowPlayingTask?.cancel()
         updateNowPlayingTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            guard let snapshot = await self.nowPlayingSnapshot(for: clip, clipIndex: clipIndex, clipID: clipID) else {
+            guard let snapshot = await self.nowPlayingSnapshot(for: clip, clipIndex: clipIndex, clipID: clip.identityKey) else {
                 self.clearNowPlayingInfo()
                 return
             }
@@ -1089,10 +1049,6 @@ final class MediaOverlayPlaybackController: ObservableObject {
         state.isPlaying ? Float(playbackRate) : 0
     }
 
-    private func clipIdentity(for clip: EPUBMediaOverlayClip?) -> String? {
-        clip?.identityKey
-    }
-
     private func nowPlayingArtwork() -> MPMediaItemArtwork? {
         // The cover is constant per loaded book; decoding it from disk on
         // every 0.5 s lock-screen tick wastes CPU and battery.
@@ -1119,7 +1075,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
     ) async -> NowPlayingSnapshot? {
         let timeline = await narratedTimeline()
         guard currentClipIndex == clipIndex,
-              clipIdentity(for: currentClip) == clipID,
+              currentClip?.identityKey == clipID,
               let currentEntry = timeline.first(where: { $0.clipIndex == clipIndex })
         else {
             return nil
@@ -1127,7 +1083,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
 
         let clipOffset = await currentOffsetWithinCurrentClip()
         guard currentClipIndex == clipIndex,
-              clipIdentity(for: currentClip) == clipID
+              currentClip?.identityKey == clipID
         else {
             return nil
         }
@@ -1300,19 +1256,17 @@ final class MediaOverlayPlaybackController: ObservableObject {
         scheduleRefreshJumpAvailability()
     }
 
-    private func deactivateAudioSession(reason: String) {
+    private func deactivateAudioSession() {
         // Any explicit deactivation supersedes a pending idle one.
         cancelAudioSessionIdleDeactivation()
-        PlaybackSignposter.measure("pause.deactivate") {
-            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        }
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
     func applicationDidEnterBackground() {
         // Background playback keeps the session active. If paused, release it so
         // other apps' audio is not blocked.
         if !state.isPlaying {
-            deactivateAudioSession(reason: "scenePhase.background")
+            deactivateAudioSession()
         }
     }
 
@@ -1337,13 +1291,13 @@ final class MediaOverlayPlaybackController: ObservableObject {
 
     /// Schedules deactivation of the audio session after `audioSessionIdleTimeout`
     /// unless playback resumes (which cancels it via `configureAudioSession`).
-    private func scheduleAudioSessionIdleDeactivation(reason: String) {
+    private func scheduleAudioSessionIdleDeactivation() {
         audioSessionIdleTask?.cancel()
         audioSessionIdleTask = Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(self.audioSessionIdleTimeout * 1_000_000_000))
             guard !Task.isCancelled, !self.state.isPlaying else { return }
-            self.deactivateAudioSession(reason: "idle[\(reason)]")
+            self.deactivateAudioSession()
         }
     }
 

@@ -32,50 +32,6 @@ nonisolated enum BookPositionValidator {
         var lastPlayedClipEnd: Double?
         var bookmarks: [Bookmark]
         var history: [HistoryEntry]
-
-        init(
-            lastLocatorJSON: String?,
-            lastPlayedTextResourceHref: String?,
-            lastPlayedFragmentID: String?,
-            lastPlayedClipBegin: Double?,
-            lastPlayedClipEnd: Double?,
-            bookmarks: [Bookmark],
-            history: [HistoryEntry]
-        ) {
-            self.lastLocatorJSON = lastLocatorJSON
-            self.lastPlayedTextResourceHref = lastPlayedTextResourceHref
-            self.lastPlayedFragmentID = lastPlayedFragmentID
-            self.lastPlayedClipBegin = lastPlayedClipBegin
-            self.lastPlayedClipEnd = lastPlayedClipEnd
-            self.bookmarks = bookmarks
-            self.history = history
-        }
-
-        /// Snapshots the positions currently held by `book`.
-        @MainActor
-        init(_ book: Book) {
-            self.init(
-                lastLocatorJSON: book.lastLocatorJSON,
-                lastPlayedTextResourceHref: book.lastPlayedTextResourceHref,
-                lastPlayedFragmentID: book.lastPlayedFragmentID,
-                lastPlayedClipBegin: book.lastPlayedClipBegin,
-                lastPlayedClipEnd: book.lastPlayedClipEnd,
-                bookmarks: book.bookmarks,
-                history: book.history
-            )
-        }
-
-        /// Writes these positions back onto `book`.
-        @MainActor
-        func apply(to book: Book) {
-            book.lastLocatorJSON = lastLocatorJSON
-            book.lastPlayedTextResourceHref = lastPlayedTextResourceHref
-            book.lastPlayedFragmentID = lastPlayedFragmentID
-            book.lastPlayedClipBegin = lastPlayedClipBegin
-            book.lastPlayedClipEnd = lastPlayedClipEnd
-            book.bookmarks = bookmarks
-            book.history = history
-        }
     }
 
     /// Prunes positions whose resource is no longer present in the new EPUB.
@@ -231,6 +187,9 @@ nonisolated enum BookPositionValidator {
         hasClipFields(textResourceHref: record.textResourceHref, clipBegin: record.clipBegin)
     }
 
+    // Book bridging lives in an extension so the memberwise initializer stays
+    // synthesized.
+
     /// Extracts the resource href from a Readium locator JSON string. Returns
     /// `nil` when the JSON can't be parsed, in which case the caller treats the
     /// resume point as unverifiable-but-kept (no resource to invalidate).
@@ -255,5 +214,33 @@ nonisolated enum BookPositionValidator {
             .map(String.init) ?? decoded
         let trimmed = filename.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+extension BookPositionValidator.Positions {
+    /// Snapshots the positions currently held by `book`.
+    @MainActor
+    init(_ book: Book) {
+        self.init(
+            lastLocatorJSON: book.lastLocatorJSON,
+            lastPlayedTextResourceHref: book.lastPlayedTextResourceHref,
+            lastPlayedFragmentID: book.lastPlayedFragmentID,
+            lastPlayedClipBegin: book.lastPlayedClipBegin,
+            lastPlayedClipEnd: book.lastPlayedClipEnd,
+            bookmarks: book.bookmarks,
+            history: book.history
+        )
+    }
+
+    /// Writes these positions back onto `book`.
+    @MainActor
+    func apply(to book: Book) {
+        book.lastLocatorJSON = lastLocatorJSON
+        book.lastPlayedTextResourceHref = lastPlayedTextResourceHref
+        book.lastPlayedFragmentID = lastPlayedFragmentID
+        book.lastPlayedClipBegin = lastPlayedClipBegin
+        book.lastPlayedClipEnd = lastPlayedClipEnd
+        book.bookmarks = bookmarks
+        book.history = history
     }
 }

@@ -37,7 +37,7 @@
 - Updated the upload/storage messaging in the UI and README to reflect `Documents/Books` and `Documents/Cache`.
 - Built successfully after the refactor.
 - Changes have been committed and pushed to GitHub.
-- Added an XCTest suite (140 tests across 20 files in `EPUB PlayerTests/`) covering
+- Added an XCTest suite (17 test files plus 3 helpers in `EPUB PlayerTests/`) covering
   persistence, storage paths, import/refresh, position validation, archive and XML
   hardening, the upload server, playback, and reader logic. CI runs it on every
   push and PR to `main` (`.github/workflows/ci.yml`).
@@ -165,7 +165,8 @@
   - Parses EPUB media overlay content and writes normalized overlay manifests.
 
 - `EPUB Player/Services/EPUBArchive.swift`
-  - Bounded ZIP extraction for untrusted EPUB files.
+  - Thin EPUB-aware wrapper over ZIPFoundation. Reads entries on demand from disk
+    (no extraction); `data(for:)` bounds each in-memory read against a size ceiling.
 
 - `EPUB Player/Services/BookPositionValidator.swift`
   - Revalidates saved positions (resume point, bookmarks, history) after a re-import,
@@ -219,7 +220,6 @@
   - `ReadiumShared`
   - `ReadiumStreamer`
   - `ReadiumNavigator`
-  - `ReadiumAdapterGCDWebServer` is linked in the project, though the current upload server implementation uses `Network.framework` directly.
 - `AVFoundation` for read-aloud playback.
 - `Network.framework` for the local HTTP upload server.
 - `CoreText` for custom font registration and metadata inspection.
@@ -308,6 +308,25 @@
 - Should the upload server's rename/delete endpoints require a password rather than defaulting to open?
 - Is additional runtime validation needed for Files app visibility and deletion/reset behavior on real devices?
 
+### Deferred from the 2026-09-04 code review (see CODE_REVIEW.md)
+The first-pass fixes (HIGH bugs A1–A5, dead-code/ablation B1–B2) landed. Still open:
+- **MEDIUM (A6–A21):** `state.json` load conflates I/O failure with corruption (A6);
+  overlay manifest commit reads whole file on main (A7); seamless auto-advance gated on a
+  log-string prefix (A8); bookmark/history snapshot mixes visible page with playing clip
+  (A9); upload connection state touched from two queues / double `cleanup()` (A10); upload
+  request validation gaps — no Content-Type/Host checks, zero-length accepted (A11);
+  completed-but-unimported uploads leak (A12); dot-prefixed rename hides then deletes a
+  book (A13); refresh discards per-file errors and mislabels cancellation (A14);
+  half-applied import on cover-commit failure (A15); bounded decompression bypassable by a
+  lying ZIP header (A16); `containedFileURL` returns the base directory for an empty stored
+  path (A17); `ClipLocationMatcher` re-normalises hrefs per lookup (A18); `narratedTimeline`
+  can cache a stale book's timeline (A19); upload progress hops main per 64 KB chunk (A20);
+  idle timer can stay disabled after the reader is gone (A21).
+- **A22 (needs on-device confirmation):** `shouldClearSavedClip` may clear the resume point
+  after a successful mid-session overlay reload; verify on device before changing.
+- **LOW / remaining B3–B4:** assorted duplicate predicates and structural collapses listed
+  in CODE_REVIEW.md §B3–B4 and the LOW bullet list.
+
 ## 8. Next Steps
 
 ### Immediate Tasks
@@ -366,7 +385,7 @@
 - Current state when this file was last updated:
   - code changes committed and pushed
   - simulator build succeeded
-  - 140 tests passing
+  - test suite passing (17 test files + 3 helpers)
   - manual fresh-install runtime verification still pending
 
 Section 4's file paths, section 7's risks, and this snapshot are the parts most likely

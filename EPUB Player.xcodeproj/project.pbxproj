@@ -10,7 +10,6 @@
 		5FBAAC902F9D000100CDF69E /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBAAC8C2F9D000100CDF69E /* ReadiumShared */; };
 		5FBAAC912F9D000100CDF69E /* ReadiumStreamer in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBAAC8D2F9D000100CDF69E /* ReadiumStreamer */; };
 		5FBAAC922F9D000100CDF69E /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBAAC8E2F9D000100CDF69E /* ReadiumNavigator */; };
-		5FBAAC932F9D000100CDF69E /* ReadiumAdapterGCDWebServer in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBAAC8F2F9D000100CDF69E /* ReadiumAdapterGCDWebServer */; };
 		5FBAACA22F9D000200CDF69E /* ReadiumZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBAACA12F9D000200CDF69E /* ReadiumZIPFoundation */; };
 /* End PBXBuildFile section */
 
@@ -50,7 +49,6 @@
 				5FBAAC902F9D000100CDF69E /* ReadiumShared in Frameworks */,
 				5FBAAC912F9D000100CDF69E /* ReadiumStreamer in Frameworks */,
 				5FBAAC922F9D000100CDF69E /* ReadiumNavigator in Frameworks */,
-				5FBAAC932F9D000100CDF69E /* ReadiumAdapterGCDWebServer in Frameworks */,
 				5FBAACA22F9D000200CDF69E /* ReadiumZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -106,7 +104,6 @@
 				5FBAAC8C2F9D000100CDF69E /* ReadiumShared */,
 				5FBAAC8D2F9D000100CDF69E /* ReadiumStreamer */,
 				5FBAAC8E2F9D000100CDF69E /* ReadiumNavigator */,
-				5FBAAC8F2F9D000100CDF69E /* ReadiumAdapterGCDWebServer */,
 				5FBAACA12F9D000200CDF69E /* ReadiumZIPFoundation */,
 			);
 			productName = EPUBPlayer;
@@ -351,6 +348,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 9LK4YZ82JR;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
@@ -369,7 +367,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 1.0.31;
+				MARKETING_VERSION = 1.0.35;
 				PRODUCT_BUNDLE_IDENTIFIER = com.seedds.epubplayer;
 				PRODUCT_MODULE_NAME = EPUBPlayer;
 				PRODUCT_NAME = EPUBPlayer;
@@ -396,6 +394,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 9LK4YZ82JR;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
@@ -414,7 +413,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 1.0.31;
+				MARKETING_VERSION = 1.0.35;
 				PRODUCT_BUNDLE_IDENTIFIER = com.seedds.epubplayer;
 				PRODUCT_MODULE_NAME = EPUBPlayer;
 				PRODUCT_NAME = EPUBPlayer;
@@ -567,11 +566,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5FBAAC8B2F9D000100CDF69E /* XCRemoteSwiftPackageReference "swift-toolkit" */;
 			productName = ReadiumNavigator;
-		};
-		5FBAAC8F2F9D000100CDF69E /* ReadiumAdapterGCDWebServer */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5FBAAC8B2F9D000100CDF69E /* XCRemoteSwiftPackageReference "swift-toolkit" */;
-			productName = ReadiumAdapterGCDWebServer;
 		};
 		5FBAACA12F9D000200CDF69E /* ReadiumZIPFoundation */ = {
 			isa = XCSwiftPackageProductDependency;

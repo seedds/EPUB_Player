@@ -8,17 +8,11 @@
 import Combine
 import Foundation
 
-enum MediaOverlayPreparationState: String, CaseIterable, Codable {
+enum MediaOverlayPreparationState: String, Codable {
     case pending
     case processing
     case ready
     case failed
-}
-
-struct NormalizedBookStoragePaths: Equatable {
-    let epubFilePath: String
-    let coverImagePath: String?
-    let mediaOverlayJSONPath: String?
 }
 
 /// A saved place in a book, shared by `Bookmark` (saved deliberately) and
@@ -88,7 +82,6 @@ nonisolated struct Bookmark: SavedPositionRecord {
     var locatorJSON: String?
     var resourceHref: String?
     var chapterProgress: Double?
-    var totalProgress: Double?
     var clipText: String?
     var textResourceHref: String?
     var fragmentID: String?
@@ -106,7 +99,6 @@ nonisolated struct HistoryEntry: SavedPositionRecord {
     var locatorJSON: String?
     var resourceHref: String?
     var chapterProgress: Double?
-    var totalProgress: Double?
     var clipText: String?
     var textResourceHref: String?
     var fragmentID: String?
@@ -126,8 +118,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
     @Published var originalFilename: String
     @Published var epubFilePath: String
     @Published var coverImagePath: String?
-    @Published var language: String?
-    @Published var metadataIdentifier: String?
     @Published var lastLocatorJSON: String?
     @Published var bookmarks: [Bookmark]
     @Published var history: [HistoryEntry]
@@ -136,7 +126,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
     @Published var lastPlayedClipBegin: Double?
     @Published var lastPlayedClipEnd: Double?
     @Published var mediaOverlayJSONPath: String?
-    @Published var mediaOverlayActiveClass: String?
     @Published var mediaOverlayDuration: Double?
     @Published var mediaOverlayClipCount: Int?
     @Published var mediaOverlayPreparationStateRawValue: String?
@@ -157,8 +146,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         originalFilename: String,
         epubFilePath: String,
         coverImagePath: String? = nil,
-        language: String? = nil,
-        metadataIdentifier: String? = nil,
         lastLocatorJSON: String? = nil,
         bookmarks: [Bookmark] = [],
         history: [HistoryEntry] = [],
@@ -167,7 +154,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         lastPlayedClipBegin: Double? = nil,
         lastPlayedClipEnd: Double? = nil,
         mediaOverlayJSONPath: String? = nil,
-        mediaOverlayActiveClass: String? = nil,
         mediaOverlayDuration: Double? = nil,
         mediaOverlayClipCount: Int? = nil,
         mediaOverlayPreparationStateRawValue: String? = MediaOverlayPreparationState.pending.rawValue,
@@ -185,8 +171,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         self.originalFilename = originalFilename
         self.epubFilePath = epubFilePath
         self.coverImagePath = coverImagePath
-        self.language = language
-        self.metadataIdentifier = metadataIdentifier
         self.lastLocatorJSON = lastLocatorJSON
         self.bookmarks = bookmarks
         self.history = history
@@ -195,7 +179,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         self.lastPlayedClipBegin = lastPlayedClipBegin
         self.lastPlayedClipEnd = lastPlayedClipEnd
         self.mediaOverlayJSONPath = mediaOverlayJSONPath
-        self.mediaOverlayActiveClass = mediaOverlayActiveClass
         self.mediaOverlayDuration = mediaOverlayDuration
         self.mediaOverlayClipCount = mediaOverlayClipCount
         self.mediaOverlayPreparationStateRawValue = mediaOverlayPreparationStateRawValue
@@ -215,8 +198,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         case originalFilename
         case epubFilePath
         case coverImagePath
-        case language
-        case metadataIdentifier
         case lastLocatorJSON
         case bookmarks
         case history
@@ -225,7 +206,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         case lastPlayedClipBegin
         case lastPlayedClipEnd
         case mediaOverlayJSONPath
-        case mediaOverlayActiveClass
         case mediaOverlayDuration
         case mediaOverlayClipCount
         case mediaOverlayPreparationStateRawValue
@@ -246,8 +226,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         originalFilename = try container.decode(String.self, forKey: .originalFilename)
         epubFilePath = try container.decode(String.self, forKey: .epubFilePath)
         coverImagePath = try container.decodeIfPresent(String.self, forKey: .coverImagePath)
-        language = try container.decodeIfPresent(String.self, forKey: .language)
-        metadataIdentifier = try container.decodeIfPresent(String.self, forKey: .metadataIdentifier)
         lastLocatorJSON = try container.decodeIfPresent(String.self, forKey: .lastLocatorJSON)
         bookmarks = try container.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
         history = try container.decodeIfPresent([HistoryEntry].self, forKey: .history) ?? []
@@ -256,7 +234,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         lastPlayedClipBegin = try container.decodeIfPresent(Double.self, forKey: .lastPlayedClipBegin)
         lastPlayedClipEnd = try container.decodeIfPresent(Double.self, forKey: .lastPlayedClipEnd)
         mediaOverlayJSONPath = try container.decodeIfPresent(String.self, forKey: .mediaOverlayJSONPath)
-        mediaOverlayActiveClass = try container.decodeIfPresent(String.self, forKey: .mediaOverlayActiveClass)
         mediaOverlayDuration = try container.decodeIfPresent(Double.self, forKey: .mediaOverlayDuration)
         mediaOverlayClipCount = try container.decodeIfPresent(Int.self, forKey: .mediaOverlayClipCount)
         mediaOverlayPreparationStateRawValue = try container.decodeIfPresent(String.self, forKey: .mediaOverlayPreparationStateRawValue)
@@ -277,8 +254,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         try container.encode(originalFilename, forKey: .originalFilename)
         try container.encode(epubFilePath, forKey: .epubFilePath)
         try container.encodeIfPresent(coverImagePath, forKey: .coverImagePath)
-        try container.encodeIfPresent(language, forKey: .language)
-        try container.encodeIfPresent(metadataIdentifier, forKey: .metadataIdentifier)
         try container.encodeIfPresent(lastLocatorJSON, forKey: .lastLocatorJSON)
         try container.encode(bookmarks, forKey: .bookmarks)
         try container.encode(history, forKey: .history)
@@ -287,7 +262,6 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         try container.encodeIfPresent(lastPlayedClipBegin, forKey: .lastPlayedClipBegin)
         try container.encodeIfPresent(lastPlayedClipEnd, forKey: .lastPlayedClipEnd)
         try container.encodeIfPresent(mediaOverlayJSONPath, forKey: .mediaOverlayJSONPath)
-        try container.encodeIfPresent(mediaOverlayActiveClass, forKey: .mediaOverlayActiveClass)
         try container.encodeIfPresent(mediaOverlayDuration, forKey: .mediaOverlayDuration)
         try container.encodeIfPresent(mediaOverlayClipCount, forKey: .mediaOverlayClipCount)
         try container.encodeIfPresent(mediaOverlayPreparationStateRawValue, forKey: .mediaOverlayPreparationStateRawValue)
@@ -308,9 +282,15 @@ nonisolated final class Book: ObservableObject, Identifiable, Codable, Hashable 
         hasher.combine(id)
     }
 
-    func updateLastLocation(_ locatorJSON: String?, openedAt: Date = Date()) {
+    func updateLastLocation(_ locatorJSON: String?) {
         self.lastLocatorJSON = locatorJSON
-        self.lastOpenedAt = openedAt
+    }
+
+    /// Stamps the last-opened time. Called only when the book is opened, not on
+    /// every location change — stamping per scroll tick published the book (and
+    /// the whole app) twice per tick for a value nothing reads at that rate.
+    func markOpened(at date: Date = Date()) {
+        self.lastOpenedAt = date
     }
 
     func updateLastPlayedClip(
@@ -399,27 +379,21 @@ extension Book {
         }
     }
 
-    var normalizedStoragePaths: NormalizedBookStoragePaths {
-        NormalizedBookStoragePaths(
-            epubFilePath: epubFilePath,
-            coverImagePath: coverImagePath,
-            mediaOverlayJSONPath: mediaOverlayJSONPath
-        )
-    }
-
     func resolvedEPUBFileURL() throws -> URL {
-        try AppStorage.bookFileURL(storedPath: normalizedStoragePaths.epubFilePath)
+        try AppStorage.bookFileURL(storedPath: epubFilePath)
     }
 
     func resolvedCoverImageURL() throws -> URL? {
-        guard let storedPath = normalizedStoragePaths.coverImagePath else {
+        guard let storedPath = coverImagePath else {
             return nil
         }
-        return try AppStorage.containedFileURL(base: AppStorage.coversDirectory(), storedPath: storedPath)
+        // Resolve without creating the covers directory: this runs on the
+        // library-list read path per row per body pass.
+        return try AppStorage.containedFileURL(base: AppStorage.coversDirectoryURL(), storedPath: storedPath)
     }
 
     func resolvedMediaOverlayJSONURL() throws -> URL? {
-        guard let storedPath = normalizedStoragePaths.mediaOverlayJSONPath else {
+        guard let storedPath = mediaOverlayJSONPath else {
             return nil
         }
         return try AppStorage.containedFileURL(base: AppStorage.mediaOverlaysDirectory(), storedPath: storedPath)

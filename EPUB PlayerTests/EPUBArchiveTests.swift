@@ -88,35 +88,6 @@ final class EPUBArchiveTests: XCTestCase {
         XCTAssertEqual(entryData, content)
     }
 
-    func testExtractRejectsPathTraversalEntries() async throws {
-        let epubData = ZIPFixtureBuilder.makeArchive(entries: [
-            ZIPFixtureEntry(name: "mimetype", data: Data("application/epub+zip".utf8)),
-            ZIPFixtureEntry(name: "META-INF/container.xml", data: Data("<container/>".utf8)),
-            ZIPFixtureEntry(name: "../escape.txt", data: Data("evil".utf8))
-        ])
-        let url = try ZIPFixtureBuilder.write(epubData, named: "traversal.epub")
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: destination) }
-        let escapeTarget = destination.deletingLastPathComponent()
-            .appendingPathComponent("escape.txt", isDirectory: false)
-        defer { try? FileManager.default.removeItem(at: escapeTarget) }
-
-        let opened = try await EPUBArchive(url: url)
-        do {
-            try await opened.extract(to: destination)
-            XCTFail("Extraction must reject path-traversal entry names")
-        } catch {
-            // expected
-        }
-        XCTAssertFalse(
-            FileManager.default.fileExists(atPath: escapeTarget.path),
-            "An entry named ../escape.txt must never be written outside the destination"
-        )
-    }
-
     // MARK: - Decompression limits
 
     /// A compression bomb declares a huge uncompressed size backed by a tiny
@@ -157,62 +128,5 @@ final class EPUBArchiveTests: XCTestCase {
         let opened = try await EPUBArchive(url: url)
         let read = try await opened.data(for: "OEBPS/audio.mp3")
         XCTAssertEqual(read?.count, content.count)
-    }
-
-    /// Extraction must stop once the archive's declared contents exceed the
-    /// budget, rather than filling the device's disk.
-    func testExtractRejectsArchiveExceedingTotalSizeBudget() async throws {
-        let epubData = ZIPFixtureBuilder.makeArchive(entries: [
-            ZIPFixtureEntry(name: "mimetype", data: Data("application/epub+zip".utf8)),
-            ZIPFixtureEntry(name: "META-INF/container.xml", data: Data("<container/>".utf8)),
-            ZIPFixtureEntry(
-                name: "OEBPS/huge.bin",
-                data: Data("x".utf8),
-                declaredUncompressedSize: 3 * 1024 * 1024 * 1024 - 1
-            )
-        ])
-        let url = try ZIPFixtureBuilder.write(epubData, named: "hugetotal.epub")
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: destination) }
-
-        let opened = try await EPUBArchive(url: url)
-        do {
-            try await opened.extract(to: destination)
-            XCTFail("Extraction must reject an archive declaring 3 GB of content")
-        } catch {
-            // expected
-        }
-    }
-
-    /// A failed extraction must not leave a partial tree behind.
-    func testExtractCleansUpAfterRejection() async throws {
-        let epubData = ZIPFixtureBuilder.makeArchive(entries: [
-            ZIPFixtureEntry(name: "mimetype", data: Data("application/epub+zip".utf8)),
-            ZIPFixtureEntry(name: "META-INF/container.xml", data: Data("<container/>".utf8)),
-            ZIPFixtureEntry(name: "OEBPS/ok.xhtml", data: Data("fine".utf8)),
-            ZIPFixtureEntry(name: "../escape.txt", data: Data("evil".utf8))
-        ])
-        let url = try ZIPFixtureBuilder.write(epubData, named: "cleanup.epub")
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: destination) }
-
-        let opened = try await EPUBArchive(url: url)
-        do {
-            try await opened.extract(to: destination)
-            XCTFail("Extraction must reject the traversal entry")
-        } catch {
-            // expected
-        }
-
-        XCTAssertFalse(
-            FileManager.default.fileExists(atPath: destination.path),
-            "A rejected extraction must not leave a partial tree behind"
-        )
     }
 }

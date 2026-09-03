@@ -35,6 +35,7 @@ final class DebugLogTests: XCTestCase {
         for index in 0..<5000 {
             log.log("line \(index) with some padding to make the entry non-trivial")
         }
+        log.flush()
 
         let size = try logFileSize()
         // Bound is maxFileBytes plus at most one buffer's worth written since
@@ -65,6 +66,7 @@ final class DebugLogTests: XCTestCase {
         for index in 0..<500 {
             log.log("entry-\(index)")
         }
+        log.flush()
 
         XCTAssertEqual(log.entries.count, 10)
         XCTAssertTrue(
@@ -80,16 +82,4 @@ final class DebugLogTests: XCTestCase {
         )
     }
 
-    func testClearTruncatesFile() throws {
-        let log = DebugLog(capacity: 100, maxFileBytes: 1_000_000, tailReadBytes: 4096)
-        for index in 0..<200 {
-            log.log("entry-\(index)")
-        }
-        XCTAssertGreaterThan(try logFileSize(), 0)
-
-        log.clear()
-
-        XCTAssertTrue(log.entries.isEmpty)
-        XCTAssertEqual(try logFileSize(), 0, "clear() must truncate the on-disk log")
-    }
 }

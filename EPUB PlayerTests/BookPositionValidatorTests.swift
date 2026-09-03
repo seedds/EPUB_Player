@@ -15,10 +15,8 @@ final class BookPositionValidatorTests: XCTestCase {
         audioPath: String = "audio.mp3"
     ) -> EPUBMediaOverlayClip {
         EPUBMediaOverlayClip(
-            textHref: fragmentID.map { "\(resourceHref)#\($0)" } ?? resourceHref,
             textResourceHref: resourceHref,
             fragmentID: fragmentID,
-            audioHref: audioPath,
             audioPath: audioPath,
             clipBegin: clipBegin,
             clipEnd: clipEnd

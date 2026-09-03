@@ -38,6 +38,7 @@ struct EPUBPlayerApp: App {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
                 appStateStore.persistNow()
+                DebugLog.shared.flush()
             }
         }
     }

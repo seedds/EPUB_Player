@@ -29,8 +29,6 @@ enum LocalLibraryError: LocalizedError {
 @MainActor
 final class UploadServerController: ObservableObject {
     private struct PendingImport {
-        typealias Kind = UploadFileKind
-
         enum Source {
             case upload(UUID)
             case manual
@@ -38,7 +36,7 @@ final class UploadServerController: ObservableObject {
 
         let sourceURL: URL
         let filename: String
-        let kind: Kind
+        let kind: UploadFileKind
         let source: Source
         let existingBookStrategy: BookImportService.ExistingBookStrategy
     }
@@ -485,7 +483,7 @@ final class UploadServerController: ObservableObject {
         book.renameStoredFile(
             to: filename,
             storedPath: AppStorage.storedBookPath(for: filename),
-            displayTitle: displayTitle(for:)
+            displayTitle: BookImportService.displayTitle(for:)
         )
         store.sortBooksByImportedAt()
         store.persistNow()
@@ -530,10 +528,6 @@ final class UploadServerController: ObservableObject {
             return sanitized
         }
         return "\(sanitized).epub"
-    }
-
-    private func displayTitle(for filename: String) -> String {
-        BookImportService.displayTitle(for: filename)
     }
 
     private static func localIPAddress() -> String? {

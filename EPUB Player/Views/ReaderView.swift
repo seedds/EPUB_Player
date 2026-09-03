@@ -138,7 +138,6 @@ struct ReaderView: View {
                 },
                 onDeleteHistory: { ids in
                     book.removeHistoryEntries(ids: ids)
-                    store.persistNow()
                 }
             )
         }
@@ -192,8 +191,7 @@ struct ReaderView: View {
             return
         }
 
-        book.updateLastLocation(book.lastLocatorJSON)
-        store.persistNow()
+        book.markOpened()
         playback.setPlaybackRate(store.playbackSpeed)
         playback.setJumpInterval(store.playbackJumpInterval)
 
@@ -898,7 +896,6 @@ struct ReaderView: View {
 
         if let existing = matchingBookmark() {
             book.removeBookmark(id: existing.id)
-            store.persistNow()
             return
         }
 
@@ -911,7 +908,6 @@ struct ReaderView: View {
                     locatorJSON: snapshot.locatorJSON,
                     resourceHref: snapshot.resourceHref,
                     chapterProgress: snapshot.chapterProgress,
-                    totalProgress: snapshot.totalProgress,
                     clipText: clipText,
                     textResourceHref: snapshot.textResourceHref,
                     fragmentID: snapshot.fragmentID,
@@ -921,7 +917,6 @@ struct ReaderView: View {
                     clipCountInChapter: snapshot.clipCountInChapter
                 )
             )
-            store.persistNow()
         }
     }
 
@@ -935,7 +930,6 @@ struct ReaderView: View {
         var locatorJSON: String?
         var resourceHref: String?
         var chapterProgress: Double?
-        var totalProgress: Double?
         var clip: EPUBMediaOverlayClip?
         var textResourceHref: String?
         var fragmentID: String?
@@ -955,8 +949,7 @@ struct ReaderView: View {
             chapterTitle: chapterTitle,
             locatorJSON: locator.jsonString,
             resourceHref: reference.resourceHref,
-            chapterProgress: locator.locations.progression,
-            totalProgress: locator.locations.totalProgression
+            chapterProgress: locator.locations.progression
         )
 
         if let clipIndex = playback.currentClipIndex,
@@ -1004,7 +997,6 @@ struct ReaderView: View {
                 locatorJSON: snapshot.locatorJSON,
                 resourceHref: snapshot.resourceHref,
                 chapterProgress: snapshot.chapterProgress,
-                totalProgress: snapshot.totalProgress,
                 clipText: clipText,
                 textResourceHref: snapshot.textResourceHref,
                 fragmentID: snapshot.fragmentID,
@@ -1019,7 +1011,6 @@ struct ReaderView: View {
                 isSamePosition: isSameHistoryPosition,
                 dropPriorMatchingSameReason: reason == .jumpedFrom
             )
-            store.persistNow()
         }
     }
 
@@ -1083,7 +1074,7 @@ struct ReaderView: View {
         ) {
             let wasPlaying = playback.state.isPlaying
             let clip = playback.clips[clipIndex]
-            pendingChapterEntryPlaybackStartClipKey = playbackStartClipKey(for: clip)
+            pendingChapterEntryPlaybackStartClipKey = clip.identityKey
             if let locator = playbackLocator(for: clip) {
                 _ = await navigator.go(to: locator, options: .animated)
             }
@@ -1122,7 +1113,7 @@ struct ReaderView: View {
         let wasPlaying = playback.state.isPlaying
         if let clipIndex = firstClipIndex(for: item.link) {
             let clip = playback.clips[clipIndex]
-            pendingChapterEntryPlaybackStartClipKey = playbackStartClipKey(for: clip)
+            pendingChapterEntryPlaybackStartClipKey = clip.identityKey
             _ = await navigator.go(to: item.link, options: .animated)
             playback.selectClip(at: clipIndex, autoplay: wasPlaying, reason: "chapterSelect")
             applyCurrentClipDecoration(with: navigator)
@@ -1161,7 +1152,7 @@ struct ReaderView: View {
             return
         }
 
-        let clipKey = playbackStartClipKey(for: currentClip)
+        let clipKey = currentClip.identityKey
         let usesChapterEntryScrollBehavior = pendingChapterEntryPlaybackStartClipKey == clipKey
         guard lastHandledPlaybackStartClipKey != clipKey else {
             return
@@ -1420,10 +1411,6 @@ struct ReaderView: View {
         return min(max(navigatorVisibleBottom / navigatorFrame.height, 0), 1)
     }
 
-    private func playbackStartClipKey(for clip: EPUBMediaOverlayClip) -> String {
-        clip.identityKey
-    }
-
     /// Reference used to highlight the active chapter. Prefers the current
     /// clip's location so the chapters list tracks read-aloud playback even when
     /// the user has scrolled away; falls back to the visible reading position.
@@ -1478,7 +1465,7 @@ struct ReaderView: View {
         }
 
         let newClip = playback.clips[newIndex]
-        let newClipKey = playbackStartClipKey(for: newClip)
+        let newClipKey = newClip.identityKey
         var markedChapterEntryPlaybackStart = false
         if let oldIndex,
            playback.clips.indices.contains(oldIndex) {
@@ -1991,7 +1978,7 @@ struct ReaderView: View {
             return
         }
 
-        let clipKey = playbackStartClipKey(for: clip)
+        let clipKey = clip.identityKey
         let clipResourceHref = normalizedResourceHref(for: clip.textResourceHref)
         guard currentLocationReference?.resourceHref == clipResourceHref else {
             DebugLog.shared.log("[highlight] applyCurrentClipDecoration branch=DEFERRED (resource mismatch: clipRes=\(clipResourceHref) currentLocation=\(String(describing: currentLocationReference?.resourceHref))) clip=\(clipKey)")
@@ -2017,7 +2004,7 @@ struct ReaderView: View {
                     id: "media-overlay-active",
                     locator: locator,
                     style: .highlight(
-                        tint: ReaderSettings.uiColor(from: store.readAloudColorRawValue),
+                        tint: ReadAloudColor.uiColor(from: store.readAloudColorRawValue),
                         isActive: true
                     )
                 ),
@@ -2030,7 +2017,7 @@ struct ReaderView: View {
     private func applyDeferredCurrentClipDecorationIfNeeded(with navigator: EPUBNavigatorViewController) {
         guard let pendingDecorationClipKey,
               let currentClip = playback.currentClip,
-              playbackStartClipKey(for: currentClip) == pendingDecorationClipKey,
+              currentClip.identityKey == pendingDecorationClipKey,
               currentLocationReference?.resourceHref == normalizedResourceHref(for: currentClip.textResourceHref)
         else {
             DebugLog.shared.log("[highlight] applyDeferredCurrentClipDecorationIfNeeded SKIP pending=\(String(describing: pendingDecorationClipKey)) currentClip=\(String(describing: playback.currentClip?.identityKey)) currentLocation=\(String(describing: currentLocationReference?.resourceHref))")
@@ -2564,7 +2551,6 @@ private struct ReaderTypographyControlPanel: View {
                             FontFamilySelectionList(
                                 customFontFamilies: customFontFamilies,
                                 selectedFontFamilyRawValue: $fontFamilyRawValue,
-                                onSelect: nil,
                                 showsSeparators: true
                             )
                         }

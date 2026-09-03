@@ -455,16 +455,8 @@ enum CustomFontStore {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func pathExtension(for filename: String, fallbackFilename: String? = nil) -> String {
-        let filenameExtension = URL(fileURLWithPath: filename).pathExtension.lowercased()
-        if !filenameExtension.isEmpty {
-            return filenameExtension
-        }
-
-        guard let fallbackFilename else {
-            return ""
-        }
-        return URL(fileURLWithPath: fallbackFilename).pathExtension.lowercased()
+    private static func pathExtension(for filename: String) -> String {
+        URL(fileURLWithPath: filename).pathExtension.lowercased()
     }
 
     private static func internalStoredFilename(for fileID: UUID, pathExtension: String) -> String {
