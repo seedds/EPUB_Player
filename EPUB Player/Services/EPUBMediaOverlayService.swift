@@ -7,7 +7,10 @@
 
 import Foundation
 
-nonisolated struct EPUBMediaOverlayProgress: Sendable {
+/// Progress of a long-running library/read-aloud operation: a 0…1 fraction and
+/// a user-facing message. One type shared by import, refresh, and media-overlay
+/// preparation, which all report the same shape.
+nonisolated struct OperationProgress: Sendable {
     var fractionCompleted: Double
     var message: String
 
@@ -91,31 +94,31 @@ enum EPUBMediaOverlayService {
         at epubURL: URL,
         bookID: UUID,
         destinationURL: URL? = nil,
-        progressHandler: ((EPUBMediaOverlayProgress) -> Void)? = nil
+        progressHandler: ((OperationProgress) -> Void)? = nil
     ) async throws -> EPUBMediaOverlayParseResult? {
         reportProgress(
-            EPUBMediaOverlayProgress(fractionCompleted: 0.05, message: "Opening EPUB..."),
+            OperationProgress(fractionCompleted: 0.05, message: "Opening EPUB..."),
             using: progressHandler
         )
         let archive = try await EPUBArchive(url: epubURL)
         reportProgress(
-            EPUBMediaOverlayProgress(fractionCompleted: 0.15, message: "Reading package metadata..."),
+            OperationProgress(fractionCompleted: 0.15, message: "Reading package metadata..."),
             using: progressHandler
         )
         guard let package = try await EPUBMetadataService.packageInfo(in: archive) else {
             reportProgress(
-                EPUBMediaOverlayProgress(fractionCompleted: 1, message: "Read-aloud unavailable"),
+                OperationProgress(fractionCompleted: 1, message: "Read-aloud unavailable"),
                 using: progressHandler
             )
             return nil
         }
         reportProgress(
-            EPUBMediaOverlayProgress(fractionCompleted: 0.25, message: "Scanning media overlays..."),
+            OperationProgress(fractionCompleted: 0.25, message: "Scanning media overlays..."),
             using: progressHandler
         )
         guard let manifest = try await parse(in: archive, package: package, progressHandler: progressHandler), manifest.clipCount > 0 else {
             reportProgress(
-                EPUBMediaOverlayProgress(fractionCompleted: 1, message: "Read-aloud unavailable"),
+                OperationProgress(fractionCompleted: 1, message: "Read-aloud unavailable"),
                 using: progressHandler
             )
             return nil
@@ -124,7 +127,7 @@ enum EPUBMediaOverlayService {
         let jsonURL = try destinationURL ?? AppStorage.mediaOverlayManifestURL(for: bookID)
         let encoder = JSONEncoder()
         reportProgress(
-            EPUBMediaOverlayProgress(fractionCompleted: 0.95, message: "Writing read-aloud data..."),
+            OperationProgress(fractionCompleted: 0.95, message: "Writing read-aloud data..."),
             using: progressHandler
         )
         // Cancellation here means the book was deleted mid-parse; writing the
@@ -135,7 +138,7 @@ enum EPUBMediaOverlayService {
         let data = try encoder.encode(manifest)
         try data.write(to: jsonURL, options: .atomic)
         reportProgress(
-            EPUBMediaOverlayProgress(fractionCompleted: 1, message: "Read-aloud ready"),
+            OperationProgress(fractionCompleted: 1, message: "Read-aloud ready"),
             using: progressHandler
         )
         return EPUBMediaOverlayParseResult(manifest: manifest, jsonURL: jsonURL)
@@ -144,9 +147,9 @@ enum EPUBMediaOverlayService {
     nonisolated private static func parse(
         in archive: EPUBArchive,
         package: EPUBPackageInfo,
-        progressHandler: ((EPUBMediaOverlayProgress) -> Void)? = nil
+        progressHandler: ((OperationProgress) -> Void)? = nil
     ) async throws -> EPUBMediaOverlayManifest? {
-        let virtualRoot = URL(fileURLWithPath: "/virtual-epub-root", isDirectory: true)
+        let virtualRoot = EPUBMetadataService.virtualRootURL
         return try await parseInternal(root: virtualRoot, package: package, progressHandler: progressHandler) { smilURL in
             guard let smilPath = AppStorage.relativePath(from: smilURL.path, under: virtualRoot.path),
                   let smilData = try await archive.data(for: smilPath)
@@ -165,7 +168,7 @@ enum EPUBMediaOverlayService {
     nonisolated private static func parseInternal(
         root: URL,
         package: EPUBPackageInfo,
-        progressHandler: ((EPUBMediaOverlayProgress) -> Void)? = nil,
+        progressHandler: ((OperationProgress) -> Void)? = nil,
         clipLoader: (URL) async throws -> [EPUBMediaOverlayClip]
     ) async throws -> EPUBMediaOverlayManifest? {
         let packageDirectory = package.packageURL.deletingLastPathComponent()
@@ -208,7 +211,7 @@ enum EPUBMediaOverlayService {
 
             let progressFraction = 0.25 + (Double(index) / Double(candidateCount)) * 0.65
             reportProgress(
-                EPUBMediaOverlayProgress(
+                OperationProgress(
                     fractionCompleted: progressFraction,
                     message: "Parsing read-aloud \(index + 1) of \(candidates.count)..."
                 ),
@@ -233,7 +236,7 @@ enum EPUBMediaOverlayService {
         }
 
         reportProgress(
-            EPUBMediaOverlayProgress(fractionCompleted: 0.9, message: "Finalizing read-aloud data..."),
+            OperationProgress(fractionCompleted: 0.9, message: "Finalizing read-aloud data..."),
             using: progressHandler
         )
 
@@ -284,10 +287,10 @@ enum EPUBMediaOverlayService {
     }
 
     nonisolated private static func reportProgress(
-        _ progress: EPUBMediaOverlayProgress,
-        using progressHandler: ((EPUBMediaOverlayProgress) -> Void)?
+        _ progress: OperationProgress,
+        using progressHandler: ((OperationProgress) -> Void)?
     ) {
-        progressHandler?(EPUBMediaOverlayProgress(
+        progressHandler?(OperationProgress(
             fractionCompleted: min(max(progress.fractionCompleted, 0), 1),
             message: progress.message
         ))

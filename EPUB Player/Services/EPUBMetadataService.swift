@@ -111,7 +111,11 @@ struct EPUBArchiveAsset {
 }
 
 enum EPUBMetadataService {
-    nonisolated private static var virtualRootURL: URL {
+    /// A synthetic base directory used only to resolve relative EPUB hrefs to
+    /// absolute URLs during parsing; nothing is read from this path on disk.
+    /// Shared with `EPUBMediaOverlayService` so both resolve against the same
+    /// root.
+    nonisolated static var virtualRootURL: URL {
         URL(fileURLWithPath: "/virtual-epub-root", isDirectory: true)
     }
 

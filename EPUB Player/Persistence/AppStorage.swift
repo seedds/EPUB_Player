@@ -138,6 +138,33 @@ enum AppStorage {
         "Books/\(sanitizedFilename(filename))"
     }
 
+    /// Deletes files in `directory` whose name starts with `prefix`. When
+    /// `olderThan` is given, only files last modified before that date are
+    /// removed (and files with no readable modification date are treated as
+    /// stale); when nil, every matching file is removed. One implementation for
+    /// the import-staging and upload-staging sweeps.
+    nonisolated static func sweepStagingFiles(in directory: URL, prefix: String, olderThan cutoff: Date? = nil) {
+        let fileManager = FileManager.default
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: cutoff == nil ? nil : [.contentModificationDateKey],
+            options: []
+        ) else {
+            return
+        }
+
+        for fileURL in contents where fileURL.lastPathComponent.hasPrefix(prefix) {
+            if let cutoff {
+                let modifiedAt = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate
+                guard modifiedAt == nil || modifiedAt! < cutoff else {
+                    continue
+                }
+            }
+            try? fileManager.removeItem(at: fileURL)
+        }
+    }
+
     nonisolated static func bookFileURL(storedPath: String) throws -> URL {
         let components = storedPath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         if components.contains(where: { $0 == "." || $0 == ".." }) {

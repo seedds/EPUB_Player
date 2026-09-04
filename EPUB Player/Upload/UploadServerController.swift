@@ -508,19 +508,7 @@ final class UploadServerController: ObservableObject {
 
     private func deleteBook(id: UUID, store: AppStateStore) throws {
         let book = try findBook(id: id, store: store)
-        MediaOverlayPreparationCoordinator.shared.cancelPreparation(for: book.id)
-        // The store record is removed regardless of disk-cleanup success, but a
-        // failure is logged rather than silently swallowed so orphaned files are
-        // diagnosable.
-        do {
-            if let epubURL = try? book.resolvedEPUBFileURL() {
-                try FileManager.default.removeItem(at: epubURL)
-            }
-            try BookAssetCacheService.removeAllCachedAssets(for: book.id)
-        } catch {
-            DebugLog.shared.log("UploadServerController: failed to remove files for \(book.originalFilename): \(error)")
-        }
-        store.removeBook(id: book.id)
+        BookImportService.deleteBook(book, store: store)
         store.persistNow()
     }
 
@@ -546,7 +534,7 @@ final class UploadServerController: ObservableObject {
             throw LocalLibraryError.invalidFilename
         }
 
-        if sanitized.lowercased().hasSuffix(".epub") {
+        if UploadFileKind.isEPUB(sanitized) {
             return sanitized
         }
         return "\(sanitized).epub"
