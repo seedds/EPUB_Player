@@ -91,6 +91,25 @@ nonisolated private final class PlaybackResources: @unchecked Sendable {
 
 @MainActor
 final class MediaOverlayPlaybackController: ObservableObject {
+    /// What caused a clip advance. Seamless (no-seek) continuation is only valid
+    /// when the advance was driven automatically by a playback boundary or an
+    /// end-of-item event; a manual/direct advance always re-seeks. Derived from
+    /// this enum rather than parsing the human-readable log `reason` string.
+    enum AdvanceTrigger {
+        case boundary
+        case endOfItem
+        case manual
+
+        var isAutomatic: Bool {
+            switch self {
+            case .boundary, .endOfItem:
+                return true
+            case .manual:
+                return false
+            }
+        }
+    }
+
     private struct NowPlayingSnapshot {
         let displayTitle: String
         let displayArtist: String?
@@ -366,7 +385,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
         scheduleRefreshJumpAvailability()
     }
 
-    func nextClip(reason: String = "manualNext") {
+    func nextClip(reason: String = "manualNext", trigger: AdvanceTrigger = .manual) {
         guard let currentClipIndex else {
             return
         }
@@ -394,7 +413,8 @@ final class MediaOverlayPlaybackController: ObservableObject {
             to: nextClip,
             fromIndex: currentClipIndex,
             toIndex: nextIndex,
-            reason: reason
+            reason: reason,
+            trigger: trigger
         ) {
             return
         }
@@ -742,6 +762,10 @@ final class MediaOverlayPlaybackController: ObservableObject {
             return cachedNarratedTimeline
         }
 
+        // A `load()` for a new book can land while we await per-clip durations
+        // below; capture the generation and only cache if it is still current,
+        // so we never write a previous book's timeline into the cache.
+        let generation = loadGeneration
         let clipSnapshot = clips
         var entries: [ClipTimelineEntry] = []
         var currentStart = 0.0
@@ -755,6 +779,10 @@ final class MediaOverlayPlaybackController: ObservableObject {
             let end = currentStart + duration
             entries.append(ClipTimelineEntry(clipIndex: clipIndex, start: currentStart, end: end))
             currentStart = end
+        }
+
+        guard generation == loadGeneration else {
+            return entries
         }
 
         cachedNarratedTimeline = entries
@@ -847,7 +875,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
                     else {
                         return
                     }
-                    self.nextClip(reason: "boundaryObserver transitionID=\(transitionID)")
+                    self.nextClip(reason: "boundaryObserver transitionID=\(transitionID)", trigger: .boundary)
                 }
             }
         }
@@ -873,7 +901,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
                     else {
                         return
                     }
-                    self.nextClip(reason: "itemEndObserver transitionID=\(transitionID)")
+                    self.nextClip(reason: "itemEndObserver transitionID=\(transitionID)", trigger: .endOfItem)
                 }
             }
 
@@ -939,10 +967,11 @@ final class MediaOverlayPlaybackController: ObservableObject {
         to nextClip: EPUBMediaOverlayClip,
         fromIndex: Int,
         toIndex: Int,
-        reason: String
+        reason: String,
+        trigger: AdvanceTrigger
     ) -> Bool {
         guard state.isPlaying,
-              isAutomaticAdvanceReason(reason),
+              trigger.isAutomatic,
               let player,
               player.currentItem != nil,
               currentClip.audioPath == nextClip.audioPath,
@@ -971,10 +1000,6 @@ final class MediaOverlayPlaybackController: ObservableObject {
         updateNowPlayingInfo(playbackRateOverride: Float(playbackRate))
         scheduleRefreshJumpAvailability()
         return true
-    }
-
-    private func isAutomaticAdvanceReason(_ reason: String) -> Bool {
-        reason.hasPrefix("boundaryObserver") || reason.hasPrefix("itemEndObserver")
     }
 
     private func addPeriodicTimeObserver(to player: AVPlayer) {
@@ -1393,8 +1418,8 @@ extension MediaOverlayPlaybackController {
 
     /// Drives the auto-advance path the boundary observer uses, so tests can
     /// exercise it without waiting on real audio playback timing.
-    func test_advanceToNextClip(reason: String = "boundaryObserver test") {
-        nextClip(reason: reason)
+    func test_advanceToNextClip(reason: String = "boundaryObserver test", trigger: AdvanceTrigger = .boundary) {
+        nextClip(reason: reason, trigger: trigger)
     }
 
     /// Simulates the current item failing to play (a corrupt/unplayable audio

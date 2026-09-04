@@ -319,7 +319,12 @@ enum BookImportService {
                 }
 
                 refreshedBooks.append(book)
+            } catch is CancellationError {
+                // The whole refresh was cancelled; don't misreport it as a
+                // per-file skip. Abort the loop and propagate.
+                throw CancellationError()
             } catch {
+                DebugLog.shared.log("[refresh] skipped \(filename): \(error)")
                 skippedFilenames.append(filename)
             }
 
@@ -349,9 +354,16 @@ enum BookImportService {
             )
         }
 
-        let completionMessage = skippedFilenames.isEmpty
-            ? "Refresh complete"
-            : "Refresh complete — skipped \(skippedFilenames.count): \(skippedFilenames.joined(separator: ", "))"
+        let completionMessage: String
+        if skippedFilenames.isEmpty {
+            completionMessage = "Refresh complete"
+        } else {
+            let previewLimit = 5
+            let preview = skippedFilenames.prefix(previewLimit).joined(separator: ", ")
+            let overflow = skippedFilenames.count - previewLimit
+            let suffix = overflow > 0 ? " and \(overflow) more" : ""
+            completionMessage = "Refresh complete — skipped \(skippedFilenames.count): \(preview)\(suffix)"
+        }
         await reportProgress(
             BookOperationProgress(fractionCompleted: 1, message: completionMessage),
             using: progressHandler
@@ -366,12 +378,12 @@ enum BookImportService {
         store: AppStateStore,
         persist: Bool = true
     ) throws -> Book {
-        try finalizeStagedLibraryFile(preparedImport.stagedLibraryFile)
-
-        // Commit cover + overlay changes only now, so a prepare that failed or
-        // was cancelled could not have destroyed the existing book's assets.
-        // The old overlay artifacts are stale once the EPUB content changed.
-        try? BookAssetCacheService.removeOverlayArtifacts(for: preparedImport.id)
+        // Commit the cover *before* moving the EPUB into place. Cover commit is
+        // the fallible step (a cache move that can throw); the EPUB move is a
+        // near-infallible same-directory rename. Doing the fallible work first
+        // means a cover failure leaves the staged EPUB untouched, so the catch
+        // in importBook can roll it back cleanly instead of leaving new bytes on
+        // disk against the old store record.
         var preparedImport = preparedImport
         if let stagedCoverFilename = preparedImport.stagedCoverFilename {
             let finalCoverPath = try BookAssetCacheService.commitStagedCover(
@@ -383,6 +395,12 @@ enum BookImportService {
             // No new cover: the reimported EPUB has none, so drop any prior one.
             try? BookAssetCacheService.removeCachedCover(for: preparedImport.id)
         }
+
+        try finalizeStagedLibraryFile(preparedImport.stagedLibraryFile)
+
+        // The old overlay artifacts are stale once the EPUB content changed;
+        // remove them only after the new EPUB is in place.
+        try? BookAssetCacheService.removeOverlayArtifacts(for: preparedImport.id)
 
         let book = upsertBook(
             from: preparedImport,

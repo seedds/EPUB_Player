@@ -81,4 +81,28 @@ final class ReaderViewLogicTests: XCTestCase {
             )
         )
     }
+
+    // MARK: - shouldAttachClip
+
+    func testAttachesClipWhenClipNarratesVisibleResource() {
+        // The user is looking at the chapter that is narrating: the clip belongs
+        // on the snapshot.
+        XCTAssertTrue(
+            ReaderView.shouldAttachClip(
+                clipResourceHref: "OEBPS/chapter3.xhtml",
+                visibleResourceHref: "OEBPS/chapter3.xhtml"
+            )
+        )
+    }
+
+    func testDoesNotAttachClipWhenScrolledToDifferentResource() {
+        // Scrolled to chapter 8 while chapter 3 narrates: attaching the clip
+        // would record a position that resolves back to chapter 3.
+        XCTAssertFalse(
+            ReaderView.shouldAttachClip(
+                clipResourceHref: "OEBPS/chapter3.xhtml",
+                visibleResourceHref: "OEBPS/chapter8.xhtml"
+            )
+        )
+    }
 }
