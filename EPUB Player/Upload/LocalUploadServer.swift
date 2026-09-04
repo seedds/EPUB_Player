@@ -187,19 +187,10 @@ final class LocalUploadServer {
     // Partial uploads left behind by a crash or force-quit are never picked up
     // again; no live connections exist before the listener starts.
     private static func removeStalePartialUploads() {
-        guard let uploadsDirectory = try? AppStorage.uploadsDirectory(),
-              let contents = try? FileManager.default.contentsOfDirectory(
-                  at: uploadsDirectory,
-                  includingPropertiesForKeys: nil,
-                  options: []
-              )
-        else {
+        guard let uploadsDirectory = try? AppStorage.uploadsDirectory() else {
             return
         }
-
-        for fileURL in contents where fileURL.lastPathComponent.hasPrefix(".upload-") {
-            try? FileManager.default.removeItem(at: fileURL)
-        }
+        AppStorage.sweepStagingFiles(in: uploadsDirectory, prefix: ".upload-")
     }
 
     private static func startupError(from error: Error, port: UInt16) -> LocalUploadServerError {
@@ -342,6 +333,12 @@ enum UploadFileKind {
         default:
             return nil
         }
+    }
+
+    /// The one place that decides whether a filename is an EPUB, so the import
+    /// pipeline, refresh scan, and rename endpoint can't disagree.
+    static func isEPUB(_ filename: String) -> Bool {
+        UploadFileKind(filename: filename) == .book
     }
 }
 

@@ -208,27 +208,9 @@ private struct BooksView: View {
     }
 
     private func deleteBooks(at offsets: IndexSet, from books: [Book]) {
-        let fileManager = FileManager.default
-
-        for index in offsets {
-            guard books.indices.contains(index) else {
-                continue
-            }
-            let book = books[index]
-            MediaOverlayPreparationCoordinator.shared.cancelPreparation(for: book.id)
-            // Remove the store record regardless of disk-cleanup success, but
-            // log failures so orphaned files are diagnosable.
-            do {
-                if let epubURL = try? book.resolvedEPUBFileURL() {
-                    try fileManager.removeItem(at: epubURL)
-                }
-                try BookAssetCacheService.removeAllCachedAssets(for: book.id)
-            } catch {
-                print("ContentView: failed to remove files for \(book.originalFilename): \(error)")
-            }
-            store.removeBook(id: book.id)
+        for index in offsets where books.indices.contains(index) {
+            BookImportService.deleteBook(books[index], store: store)
         }
-
         store.persistNow()
     }
 
