@@ -177,7 +177,10 @@ enum AppStorage {
     nonisolated static func containedFileURL(base: URL, storedPath: String) throws -> URL {
         let pathComponents = storedPath.split(separator: "/").map(String.init)
         guard !pathComponents.isEmpty else {
-            return base
+            // An empty stored path used to resolve to `base` itself, so callers
+            // like `resolvedCoverImageURL` saw the covers *directory* pass
+            // `fileExists` and treated it as a valid file. Reject it instead.
+            throw AppStorageError.invalidStoredFilePath(storedPath: storedPath)
         }
 
         for component in pathComponents where component == "." || component == ".." {

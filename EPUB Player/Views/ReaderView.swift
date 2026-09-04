@@ -779,6 +779,18 @@ struct ReaderView: View {
         hasRestoredPlaybackState && !isReloadingOverlays && hasLoadedClips
     }
 
+    /// Whether the currently-playing clip should be attached to a
+    /// bookmark/history snapshot taken at `visibleResourceHref`. It should only
+    /// be attached when the clip narrates the resource the user is actually
+    /// looking at; otherwise the snapshot mixes the visible page's chapter with
+    /// a clip from a different chapter and later resolves to the wrong place.
+    nonisolated static func shouldAttachClip(
+        clipResourceHref: String,
+        visibleResourceHref: String
+    ) -> Bool {
+        clipResourceHref == visibleResourceHref
+    }
+
     @MainActor
     private func restoreLastPlayedClipSelectionIfAvailable(with navigator: EPUBNavigatorViewController) async {
         hasRestoredPlaybackState = true
@@ -955,18 +967,26 @@ struct ReaderView: View {
         if let clipIndex = playback.currentClipIndex,
            playback.clips.indices.contains(clipIndex) {
             let clip = playback.clips[clipIndex]
-            snapshot.clip = clip
-            snapshot.textResourceHref = clip.textResourceHref
-            snapshot.fragmentID = clip.fragmentID
-            snapshot.clipBegin = clip.clipBegin
-            snapshot.clipEnd = clip.clipEnd
-
             let clipResourceHref = normalizedResourceHref(for: clip.textResourceHref)
-            let chapterClipIndices = playback.clips.indices.filter { index in
-                normalizedResourceHref(for: playback.clips[index].textResourceHref) == clipResourceHref
+
+            // Only attach the playing clip when it belongs to the resource the
+            // user is actually looking at. If they scrolled to another chapter
+            // while a clip narrates, mixing the visible page's chapter/locator
+            // with a mismatched clip records a position that later resolves to
+            // the wrong place. In that case snapshot the visual position only.
+            if Self.shouldAttachClip(clipResourceHref: clipResourceHref, visibleResourceHref: reference.resourceHref) {
+                snapshot.clip = clip
+                snapshot.textResourceHref = clip.textResourceHref
+                snapshot.fragmentID = clip.fragmentID
+                snapshot.clipBegin = clip.clipBegin
+                snapshot.clipEnd = clip.clipEnd
+
+                let chapterClipIndices = playback.clips.indices.filter { index in
+                    normalizedResourceHref(for: playback.clips[index].textResourceHref) == clipResourceHref
+                }
+                snapshot.clipCountInChapter = chapterClipIndices.count
+                snapshot.clipNumberInChapter = chapterClipIndices.firstIndex(of: clipIndex).map { $0 + 1 }
             }
-            snapshot.clipCountInChapter = chapterClipIndices.count
-            snapshot.clipNumberInChapter = chapterClipIndices.firstIndex(of: clipIndex).map { $0 + 1 }
         }
 
         return snapshot

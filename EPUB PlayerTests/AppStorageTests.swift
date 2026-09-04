@@ -125,6 +125,32 @@ final class AppStorageTests: XCTestCase {
         XCTAssertEqual(url.lastPathComponent, "ABCDEF.png")
     }
 
+    func testContainedFileURLRejectsEmptyStoredPath() {
+        // An empty stored path used to resolve to the base directory itself,
+        // so a book with `coverImagePath == ""` saw the covers directory pass
+        // `fileExists` and treated it as a cover file.
+        let base = FileManager.default.temporaryDirectory
+        XCTAssertThrowsError(try AppStorage.containedFileURL(base: base, storedPath: "")) { error in
+            guard case AppStorageError.invalidStoredFilePath = error else {
+                return XCTFail("Expected invalidStoredFilePath, got \(error)")
+            }
+        }
+    }
+
+    func testResolvedCoverImageURLRejectsEmptyStoredPath() {
+        let book = Book(
+            title: "T",
+            originalFilename: "t.epub",
+            epubFilePath: "Books/t.epub",
+            coverImagePath: ""
+        )
+        XCTAssertThrowsError(try book.resolvedCoverImageURL()) { error in
+            guard case AppStorageError.invalidStoredFilePath = error else {
+                return XCTFail("Expected invalidStoredFilePath, got \(error)")
+            }
+        }
+    }
+
     func testResolvedMediaOverlayJSONURLRejectsTraversal() throws {
         let book = Book(
             title: "T",
