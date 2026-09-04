@@ -79,54 +79,50 @@ struct EPUBArchive {
         }
 
         // The declared size is attacker-controlled, so also stop accumulating
-        // if the actual stream runs past the limit.
+        // if the actual stream runs past the limit. The consumer throws the
+        // moment it does, which aborts the extract instead of decompressing the
+        // whole bomb to completion (memory was already bounded; this bounds CPU
+        // and time too).
         let accumulator = DataAccumulator(byteLimit: Int(Self.maxEntryBytes))
         do {
             _ = try await archive.extract(entry, skipCRC32: true) { chunk in
-                accumulator.append(chunk)
+                try accumulator.append(chunk)
             }
+        } catch is DataAccumulator.LimitExceeded {
+            throw EPUBArchiveError.entryTooLarge(path)
         } catch {
             throw EPUBArchiveError.corruptEntry(path)
         }
 
-        guard !accumulator.didExceedLimit else {
-            throw EPUBArchiveError.entryTooLarge(path)
-        }
         return accumulator.take()
     }
 
     // The extract consumer is @Sendable, so chunk accumulation needs a
     // lock-guarded box rather than a captured var.
     private nonisolated final class DataAccumulator: @unchecked Sendable {
+        /// Thrown by `append` when the accumulated bytes would exceed the limit,
+        /// so the caller can abort the extract stream.
+        struct LimitExceeded: Error {}
+
         private let lock = NSLock()
         private var buffer = Data()
         private let byteLimit: Int
-        private var exceededLimit = false
 
         init(byteLimit: Int) {
             self.byteLimit = byteLimit
         }
 
-        /// Stops buffering once the limit is passed. The extract consumer has
-        /// no way to abort the stream, so the alternative to dropping chunks is
-        /// letting a bomb allocate without bound.
-        func append(_ chunk: Data) {
+        /// Throws `LimitExceeded` once the buffer would pass the limit, aborting
+        /// the extract rather than letting a bomb keep decompressing.
+        func append(_ chunk: Data) throws {
             lock.lock()
             defer { lock.unlock() }
-            guard !exceededLimit else { return }
 
-            if buffer.count + chunk.count > byteLimit {
-                exceededLimit = true
+            guard buffer.count + chunk.count <= byteLimit else {
                 buffer.removeAll(keepingCapacity: false)
-                return
+                throw LimitExceeded()
             }
             buffer.append(chunk)
-        }
-
-        var didExceedLimit: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return exceededLimit
         }
 
         func take() -> Data {

@@ -134,9 +134,22 @@ extension PersistedAppState {
 }
 
 private enum PersistedAppStateLoadResult {
+    /// state.json decoded (missing keys tolerated).
     case loaded(PersistedAppState)
+    /// No state.json on disk — a fresh install. Defaults, saving enabled.
     case missing
-    case unreadable
+    /// state.json exists but could not be read (locked/permissions). The file
+    /// is kept and saving is disabled so a transient failure can't overwrite it.
+    case ioError
+    /// state.json was read but is not valid app state (non-JSON, or a `books`
+    /// value that is not an array). Backed up, then defaults.
+    case corrupt
+}
+
+/// A user-surfaced persistence problem, shown non-blockingly in Settings.
+enum PersistenceFailure: Equatable {
+    case loadFailed
+    case saveFailed
 }
 
 @MainActor
@@ -166,6 +179,10 @@ final class AppStateStore: ObservableObject {
     /// change. `BooksView.body` re-evaluates on every book mutation (each
     /// location tick), so sorting the whole library there — with
     /// `localizedCaseInsensitiveCompare` — was per-scroll-tick work.
+    /// Set when loading or saving state.json fails, so Settings can show a
+    /// non-blocking notice. Cleared on the next successful write.
+    @Published private(set) var persistenceFailure: PersistenceFailure?
+
     private var cachedSortedBooks: [Book]?
 
     private var bookSubscriptions: [UUID: AnyCancellable] = [:]
@@ -261,9 +278,16 @@ final class AppStateStore: ObservableObject {
         case .missing:
             canPersistState = true
             applyPersistedState(.default)
-        case .unreadable:
-            // Keep the unreadable file around for recovery; only allow
-            // overwriting it once it has been safely moved aside.
+        case .ioError:
+            // The file exists but couldn't be read. Keep it untouched and stop
+            // persisting so a transient read failure can't clobber the user's
+            // real library with defaults; surface it in Settings.
+            canPersistState = false
+            persistenceFailure = .loadFailed
+            applyPersistedState(.default)
+        case .corrupt:
+            // The file is unrecoverable as app state. Move it aside for recovery
+            // and only allow overwriting once it has been safely backed up.
             canPersistState = backUpUnreadableStateFile()
             applyPersistedState(.default)
         }
@@ -296,7 +320,7 @@ final class AppStateStore: ObservableObject {
 
     private func readPersistedState() -> PersistedAppStateLoadResult {
         guard let stateURL = try? AppStorage.stateURL() else {
-            return .unreadable
+            return .ioError
         }
 
         guard FileManager.default.fileExists(atPath: stateURL.path) else {
@@ -304,11 +328,25 @@ final class AppStateStore: ObservableObject {
         }
 
         guard let data = try? Data(contentsOf: stateURL) else {
-            return .unreadable
+            // The file is present but the read failed (locked/permissions): an
+            // I/O problem, not corruption. Distinguishing the two decides
+            // whether we keep the file or move it aside.
+            return .ioError
+        }
+
+        // A parseable JSON object whose `books` value is present but not an
+        // array is structurally wrong (e.g. a truncated/rewritten file): treat
+        // it as corrupt rather than silently loading zero books and letting the
+        // next save overwrite the user's real library.
+        if let object = try? JSONSerialization.jsonObject(with: data),
+           let dictionary = object as? [String: Any],
+           let books = dictionary["books"],
+           !(books is [Any]) {
+            return .corrupt
         }
 
         guard let persistedState = try? JSONDecoder().decode(PersistedAppState.self, from: data) else {
-            return .unreadable
+            return .corrupt
         }
 
         return .loaded(persistedState)
@@ -484,16 +522,25 @@ final class AppStateStore: ObservableObject {
     private func writeStateToDisk() {
         let persistedState = currentPersistedState()
 
-        guard let data = try? JSONEncoder().encode(persistedState),
-              let stateURL = try? AppStorage.stateURL()
-        else {
-            return
+        do {
+            let data = try JSONEncoder().encode(persistedState)
+            let stateURL = try AppStorage.stateURL()
+            try data.write(to: stateURL, options: .atomic)
+            // A previously-failed save (or load) has now succeeded; clear the
+            // notice. `canPersistState` was left true so this retry could run.
+            if persistenceFailure == .saveFailed {
+                persistenceFailure = nil
+            }
+            #if DEBUG
+            diskWriteCount += 1
+            #endif
+        } catch {
+            // Keep persisting enabled so the next mutation retries; a transient
+            // failure self-heals rather than silently disabling saves for the
+            // rest of the session.
+            DebugLog.shared.log("AppStateStore: failed to write state.json: \(error)")
+            persistenceFailure = .saveFailed
         }
-
-        try? data.write(to: stateURL, options: .atomic)
-        #if DEBUG
-        diskWriteCount += 1
-        #endif
     }
 }
 

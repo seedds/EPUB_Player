@@ -8,12 +8,19 @@ import Foundation
 nonisolated enum ClipLocationMatcher {
     typealias ResourceNormalizer = (String) -> String
 
+    // Every lookup takes `clipResourceHrefs`: the clips' text resource hrefs,
+    // already normalized once by the caller (parallel to `clips`). Normalizing
+    // each clip href inside every scan was O(clips) string work per lookup on
+    // the hot location-change path. The `normalize:` seam is kept only for the
+    // caller-supplied query href, which is a single string.
+
     static func savedPositionIndex(
         textResourceHref: String?,
         fragmentID: String?,
         clipBegin: Double?,
         clipEnd: Double?,
         clips: [EPUBMediaOverlayClip],
+        clipResourceHrefs: [String],
         normalize: ResourceNormalizer
     ) -> Int? {
         guard let textResourceHref else {
@@ -25,68 +32,65 @@ nonisolated enum ClipLocationMatcher {
             ofFragment: fragmentID,
             inResource: resourceHref,
             clips: clips,
-            normalize: normalize,
+            clipResourceHrefs: clipResourceHrefs,
             where: { $0.clipBegin == clipBegin && $0.clipEnd == clipEnd }
         ) {
             return exactMatch
         }
 
-        return index(ofFragment: fragmentID, inResource: resourceHref, clips: clips, normalize: normalize)
+        return index(ofFragment: fragmentID, inResource: resourceHref, clips: clips, clipResourceHrefs: clipResourceHrefs)
     }
 
     static func exactIndex(
         resourceHref: String,
         fragmentID: String?,
         clips: [EPUBMediaOverlayClip],
-        normalize: ResourceNormalizer
+        clipResourceHrefs: [String]
     ) -> Int? {
         guard let fragmentID, !fragmentID.isEmpty else {
             return nil
         }
 
-        return index(ofFragment: fragmentID, inResource: resourceHref, clips: clips, normalize: normalize)
+        return index(ofFragment: fragmentID, inResource: resourceHref, clips: clips, clipResourceHrefs: clipResourceHrefs)
     }
 
     static func firstIndex(
         resourceHref: String,
         fragmentID: String?,
         clips: [EPUBMediaOverlayClip],
-        normalize: ResourceNormalizer
+        clipResourceHrefs: [String]
     ) -> Int? {
         guard fragmentID != nil else {
-            return firstIndex(resourceHref: resourceHref, clips: clips, normalize: normalize)
+            return firstIndex(resourceHref: resourceHref, clipResourceHrefs: clipResourceHrefs)
         }
 
         // Clip hrefs are fragment-stripped at creation, so a fragment reference
         // must match on the clip's own fragmentID before falling back to the file.
-        if let fragmentMatch = index(ofFragment: fragmentID, inResource: resourceHref, clips: clips, normalize: normalize) {
+        if let fragmentMatch = index(ofFragment: fragmentID, inResource: resourceHref, clips: clips, clipResourceHrefs: clipResourceHrefs) {
             return fragmentMatch
         }
 
-        return firstIndex(resourceHref: resourceHref, clips: clips, normalize: normalize)
+        return firstIndex(resourceHref: resourceHref, clipResourceHrefs: clipResourceHrefs)
     }
 
     static func firstIndex(
         resourceHref: String,
-        clips: [EPUBMediaOverlayClip],
-        normalize: ResourceNormalizer
+        clipResourceHrefs: [String]
     ) -> Int? {
-        index(inResource: resourceHref, clips: clips, normalize: normalize)
+        clipResourceHrefs.firstIndex(of: resourceHref)
     }
 
     static func firstIndexAfterResource(
         _ resourceHref: String,
-        readingOrderResourceHrefs: [String],
-        clips: [EPUBMediaOverlayClip],
-        normalize: ResourceNormalizer
+        readingOrderIndex: [String: Int],
+        clipResourceHrefs: [String]
     ) -> Int? {
-        guard let currentResourceOrder = readingOrderResourceHrefs.firstIndex(of: resourceHref) else {
+        guard let currentResourceOrder = readingOrderIndex[resourceHref] else {
             return nil
         }
 
-        for (index, clip) in clips.enumerated() {
-            let clipResourceHref = normalize(clip.textResourceHref)
-            guard let clipResourceOrder = readingOrderResourceHrefs.firstIndex(of: clipResourceHref),
+        for (index, clipResourceHref) in clipResourceHrefs.enumerated() {
+            guard let clipResourceOrder = readingOrderIndex[clipResourceHref],
                   clipResourceOrder > currentResourceOrder
             else {
                 continue
@@ -100,16 +104,17 @@ nonisolated enum ClipLocationMatcher {
 
     // MARK: - Helpers
 
-    /// First clip in `resourceHref` (already normalized) also satisfying
-    /// `predicate`. The href comparison is the one shape every lookup shares.
+    /// First clip whose (pre-normalized) resource matches `resourceHref` and
+    /// that also satisfies `predicate`. The href comparison is the one shape
+    /// every lookup shares.
     private static func index(
         inResource resourceHref: String,
         clips: [EPUBMediaOverlayClip],
-        normalize: ResourceNormalizer,
+        clipResourceHrefs: [String],
         where predicate: (EPUBMediaOverlayClip) -> Bool = { _ in true }
     ) -> Int? {
-        clips.firstIndex { clip in
-            normalize(clip.textResourceHref) == resourceHref && predicate(clip)
+        clipResourceHrefs.indices.first { i in
+            clipResourceHrefs[i] == resourceHref && predicate(clips[i])
         }
     }
 
@@ -119,10 +124,10 @@ nonisolated enum ClipLocationMatcher {
         ofFragment fragmentID: String?,
         inResource resourceHref: String,
         clips: [EPUBMediaOverlayClip],
-        normalize: ResourceNormalizer,
+        clipResourceHrefs: [String],
         where predicate: (EPUBMediaOverlayClip) -> Bool = { _ in true }
     ) -> Int? {
-        index(inResource: resourceHref, clips: clips, normalize: normalize) { clip in
+        index(inResource: resourceHref, clips: clips, clipResourceHrefs: clipResourceHrefs) { clip in
             clip.fragmentID == fragmentID && predicate(clip)
         }
     }

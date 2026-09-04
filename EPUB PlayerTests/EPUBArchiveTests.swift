@@ -110,8 +110,10 @@ final class EPUBArchiveTests: XCTestCase {
         do {
             _ = try await opened.data(for: "OEBPS/bomb.xhtml")
             XCTFail("Reading an entry that declares 900 MB must be rejected")
-        } catch {
-            // expected
+        } catch let error as EPUBArchiveError {
+            guard case .entryTooLarge = error else {
+                return XCTFail("Expected entryTooLarge, got \(error)")
+            }
         }
     }
 

@@ -1272,8 +1272,14 @@ final class MediaOverlayPreparationCoordinator {
 
                 if result != nil {
                     let finalManifestURL = try AppStorage.mediaOverlayManifestURL(for: bookID)
-                    let data = try Data(contentsOf: stagedManifestURL)
-                    try data.write(to: finalManifestURL, options: .atomic)
+                    // Move the staged manifest into place instead of reading the
+                    // whole file into memory and rewriting it on the main actor.
+                    let fileManager = FileManager.default
+                    if fileManager.fileExists(atPath: finalManifestURL.path) {
+                        _ = try fileManager.replaceItemAt(finalManifestURL, withItemAt: stagedManifestURL)
+                    } else {
+                        try fileManager.moveItem(at: stagedManifestURL, to: finalManifestURL)
+                    }
                 }
 
                 updatedBook.mediaOverlayJSONPath = result == nil ? nil : try AppStorage.mediaOverlayManifestURL(for: bookID).lastPathComponent
