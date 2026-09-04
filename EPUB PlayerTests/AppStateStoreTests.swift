@@ -267,6 +267,50 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: backups[0]), Data("not json".utf8))
     }
 
+    func testNonArrayBooksIsTreatedAsCorruptAndBackedUp() async throws {
+        // A structurally wrong file (books present but not an array) must not
+        // silently load zero books and then let the next save overwrite it.
+        let stateURL = try AppStorage.stateURL()
+        let stateJSON = Data(#"{"books": {"oops": true}, "fontSize": 20}"#.utf8)
+        try stateJSON.write(to: stateURL)
+
+        let reloadedStore = AppStateStore()
+        XCTAssertTrue(reloadedStore.books.isEmpty)
+        XCTAssertEqual(reloadedStore.fontSize, ReaderSettings.defaultFontSize, "Corrupt state must load defaults, not partial values")
+
+        reloadedStore.persistNow()
+
+        let backups = try FileManager.default.contentsOfDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("state-corrupt-") }
+        XCTAssertEqual(backups.count, 1, "Non-array books must be backed up before defaults overwrite it")
+        XCTAssertEqual(try Data(contentsOf: backups[0]), stateJSON)
+    }
+
+    func testMinimalObjectLoadsDefaultsWithoutBackup() async throws {
+        // A parseable object with no books key is a legitimately minimal state,
+        // not corruption: load defaults, keep persisting, don't back anything up.
+        let stateURL = try AppStorage.stateURL()
+        try Data("{}".utf8).write(to: stateURL)
+
+        let reloadedStore = AppStateStore()
+        XCTAssertTrue(reloadedStore.books.isEmpty)
+        XCTAssertNil(reloadedStore.persistenceFailure)
+
+        reloadedStore.fontSize = 30
+        reloadedStore.persistNow()
+
+        let backups = try FileManager.default.contentsOfDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("state-corrupt-") }
+        XCTAssertTrue(backups.isEmpty, "A minimal {} state must not be treated as corrupt")
+
+        let reReloaded = AppStateStore()
+        XCTAssertEqual(reReloaded.fontSize, 30, "Saving must stay enabled after loading a minimal state")
+    }
+
     func testUploadServerPasswordDefaultsToOff() {
         XCTAssertFalse(store.uploadServerRequiresPassword)
         XCTAssertEqual(store.uploadServerPassword, "")

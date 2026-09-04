@@ -34,7 +34,12 @@ struct ReaderView: View {
     @State private var cachedActiveChapterItemID: ChapterListItem.ID?
     @State private var currentLocationReference: EPUBReference?
     @State private var currentChapterProgress: Double?
-    @State private var readingOrderResourceHrefs: [String] = []
+    // Reading-order hrefs indexed for O(1) position lookups, and the clips'
+    // resource hrefs normalized once. Both feed `ClipLocationMatcher`, which ran
+    // on every location change; normalizing per clip per lookup there was hot-
+    // path string work.
+    @State private var readingOrderIndex: [String: Int] = [:]
+    @State private var normalizedClipResourceHrefs: [String] = []
     @State private var isPlaybackSpeedControlPresented = false
     @State private var isReaderSettingsControlPresented = false
     @State private var customFontFamilies: [CustomFontStore.ImportedFontFamily] = []
@@ -148,24 +153,26 @@ struct ReaderView: View {
             persistLastPlayedClip(immediately: true)
             isPlaybackSpeedControlPresented = false
             isReaderSettingsControlPresented = false
-            // Clear the screen-awake flag whenever we're not actively playing,
-            // even if the chapter/bookmarks screen is on top. Otherwise popping
-            // the reader off the stack while that screen is presented skips the
-            // teardown below and leaves the idle timer disabled indefinitely.
-            if !playback.state.isPlaying {
-                UIApplication.shared.isIdleTimerDisabled = false
-            }
             // Don't tear down playback when disappearing because we pushed the
             // chapters/bookmarks screen on top of the reader; only stop when the
-            // reader is actually being closed.
+            // reader is actually being closed. Note: the chapter screen can be on
+            // top *and* playing when the reader is popped (e.g. a back-button
+            // long-press pops two levels at once), so the idle-timer reset below
+            // must not be gated on either condition.
             guard !isChapterListPresented else {
+                // Still let the screen sleep again if playback isn't active.
+                if !playback.state.isPlaying {
+                    UIApplication.shared.isIdleTimerDisabled = false
+                }
                 return
             }
             lastHandledPlaybackStartClipKey = nil
             pendingDecorationClipKey = nil
             backgroundEnteredAt = nil
-            // Ensure the screen-awake flag can't leak past playback if the
-            // reader is closed while still playing.
+            // The reader is being closed: unconditionally restore auto-lock. The
+            // `.onChange(of: playback.state)` handler that normally does this
+            // dies with the view, so a reader popped while still playing would
+            // otherwise leave the screen awake indefinitely.
             UIApplication.shared.isIdleTimerDisabled = false
             playback.stop(reason: "readerView.onDisappear")
         }
@@ -232,8 +239,10 @@ struct ReaderView: View {
             )
             navigator.submitPreferences(preferences)
             self.chapterItems = chapterItems
-            self.readingOrderResourceHrefs = publication.readingOrder.map { normalizedResourceHref(for: $0.href) }
+            let orderHrefs = publication.readingOrder.map { normalizedResourceHref(for: $0.href) }
+            self.readingOrderIndex = Dictionary(orderHrefs.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
             state = .ready(publication: publication, navigator: navigator)
+            normalizedClipResourceHrefs = playback.clips.map { normalizedResourceHref(for: $0.textResourceHref) }
             await restoreLastPlayedClipSelectionIfAvailable(with: navigator)
             refreshActiveChapterItemID()
         } catch {
@@ -369,6 +378,9 @@ struct ReaderView: View {
     private func readyReaderView(for navigator: EPUBNavigatorViewController) -> some View {
         readerSettingsObservers(for: navigator) {
             navigatorHost(for: navigator)
+            .onChange(of: playback.clips) { _, newClips in
+                normalizedClipResourceHrefs = newClips.map { normalizedResourceHref(for: $0.textResourceHref) }
+            }
             .onChange(of: playback.currentClipIndex) { oldIndex, newIndex in
                 handleCurrentClipChange(oldIndex: oldIndex, newIndex: newIndex, navigator: navigator)
             }
@@ -818,6 +830,7 @@ struct ReaderView: View {
             clipBegin: book.lastPlayedClipBegin,
             clipEnd: book.lastPlayedClipEnd,
             clips: playback.clips,
+            clipResourceHrefs: normalizedClipResourceHrefs,
             normalize: normalizedResourceHref(for:)
         )
     }
@@ -1123,6 +1136,7 @@ struct ReaderView: View {
             clipBegin: clipBegin,
             clipEnd: clipEnd,
             clips: playback.clips,
+            clipResourceHrefs: normalizedClipResourceHrefs,
             normalize: normalizedResourceHref(for:)
         )
     }
@@ -1351,7 +1365,7 @@ struct ReaderView: View {
             resourceHref: reference.resourceHref,
             fragmentID: reference.fragmentID,
             clips: playback.clips,
-            normalize: normalizedResourceHref(for:)
+            clipResourceHrefs: normalizedClipResourceHrefs
         )
     }
 
@@ -1364,24 +1378,22 @@ struct ReaderView: View {
             resourceHref: reference.resourceHref,
             fragmentID: reference.fragmentID,
             clips: playback.clips,
-            normalize: normalizedResourceHref(for:)
+            clipResourceHrefs: normalizedClipResourceHrefs
         )
     }
 
     private func firstClipIndex(forResourceHref resourceHref: String) -> Int? {
         ClipLocationMatcher.firstIndex(
             resourceHref: resourceHref,
-            clips: playback.clips,
-            normalize: normalizedResourceHref(for:)
+            clipResourceHrefs: normalizedClipResourceHrefs
         )
     }
 
     private func firstClipIndex(afterResourceHref resourceHref: String) -> Int? {
         ClipLocationMatcher.firstIndexAfterResource(
             resourceHref,
-            readingOrderResourceHrefs: readingOrderResourceHrefs,
-            clips: playback.clips,
-            normalize: normalizedResourceHref(for:)
+            readingOrderIndex: readingOrderIndex,
+            clipResourceHrefs: normalizedClipResourceHrefs
         )
     }
 

@@ -19,6 +19,7 @@ final class ClipLocationMatcherTests: XCTestCase {
             clipBegin: 3,
             clipEnd: 4,
             clips: clips,
+            clipResourceHrefs: normalized(clips),
             normalize: filename
         )
 
@@ -36,6 +37,7 @@ final class ClipLocationMatcherTests: XCTestCase {
             clipBegin: 3,
             clipEnd: 4,
             clips: clips,
+            clipResourceHrefs: normalized(clips),
             normalize: filename
         )
 
@@ -49,13 +51,13 @@ final class ClipLocationMatcherTests: XCTestCase {
             resourceHref: "chapter.xhtml",
             fragmentID: nil,
             clips: clips,
-            normalize: filename
+            clipResourceHrefs: normalized(clips)
         ))
         XCTAssertEqual(ClipLocationMatcher.exactIndex(
             resourceHref: "chapter.xhtml",
             fragmentID: "p1",
             clips: clips,
-            normalize: filename
+            clipResourceHrefs: normalized(clips)
         ), 0)
     }
 
@@ -69,13 +71,13 @@ final class ClipLocationMatcherTests: XCTestCase {
             resourceHref: "chapter.xhtml",
             fragmentID: "p2",
             clips: clips,
-            normalize: filename
+            clipResourceHrefs: normalized(clips)
         ), 1)
         XCTAssertEqual(ClipLocationMatcher.firstIndex(
             resourceHref: "chapter.xhtml",
             fragmentID: "missing",
             clips: clips,
-            normalize: filename
+            clipResourceHrefs: normalized(clips)
         ), 0)
     }
 
@@ -87,9 +89,8 @@ final class ClipLocationMatcherTests: XCTestCase {
 
         let index = ClipLocationMatcher.firstIndexAfterResource(
             "chapter1.xhtml",
-            readingOrderResourceHrefs: ["intro.xhtml", "chapter1.xhtml", "chapter2.xhtml"],
-            clips: clips,
-            normalize: filename
+            readingOrderIndex: ["intro.xhtml": 0, "chapter1.xhtml": 1, "chapter2.xhtml": 2],
+            clipResourceHrefs: normalized(clips)
         )
 
         XCTAssertEqual(index, 1)
@@ -108,6 +109,10 @@ final class ClipLocationMatcherTests: XCTestCase {
             clipBegin: begin,
             clipEnd: end
         )
+    }
+
+    private func normalized(_ clips: [EPUBMediaOverlayClip]) -> [String] {
+        clips.map { filename($0.textResourceHref) }
     }
 
     private func filename(_ href: String) -> String {

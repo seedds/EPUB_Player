@@ -800,6 +800,18 @@ private struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let persistenceFailure = store.persistenceFailure {
+                    Section {
+                        Label {
+                            Text(persistenceFailureMessage(persistenceFailure))
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        .font(.footnote)
+                    }
+                }
+
                 Section("Reader") {
                     NavigationLink {
                         SkipIntervalSettingView(playbackJumpInterval: $store.playbackJumpInterval)
@@ -956,6 +968,15 @@ private struct SettingsView: View {
 
     private var selectedThemeName: String {
         ReaderSettings.appTheme(from: store.themeRawValue).name
+    }
+
+    private func persistenceFailureMessage(_ failure: PersistenceFailure) -> String {
+        switch failure {
+        case .loadFailed:
+            return "Your saved library couldn't be loaded, so changes aren't being saved. Reopen the app to try again."
+        case .saveFailed:
+            return "Some changes couldn't be saved. The app will keep trying automatically."
+        }
     }
 
     private var selectedReadingBackground: ReadingBackgroundOption {
