@@ -150,6 +150,55 @@ final class LocalUploadServerTests: XCTestCase {
         )
     }
 
+    // MARK: - Host validation (DNS-rebinding guard)
+
+    func testTrustedHostAcceptsIPAndLocalNames() {
+        XCTAssertTrue(UploadRequestLimits.isTrustedHost("192.168.1.5"))
+        XCTAssertTrue(UploadRequestLimits.isTrustedHost("192.168.1.5:8080"))
+        XCTAssertTrue(UploadRequestLimits.isTrustedHost("10.0.0.1"))
+        XCTAssertTrue(UploadRequestLimits.isTrustedHost("iphone.local"))
+        XCTAssertTrue(UploadRequestLimits.isTrustedHost("iphone.local:80"))
+        XCTAssertTrue(UploadRequestLimits.isTrustedHost("localhost"))
+        XCTAssertTrue(UploadRequestLimits.isTrustedHost("[::1]"))
+        XCTAssertTrue(UploadRequestLimits.isTrustedHost("[fe80::1]:80"))
+    }
+
+    func testTrustedHostRejectsDomainsAndEmpty() {
+        XCTAssertFalse(UploadRequestLimits.isTrustedHost(nil))
+        XCTAssertFalse(UploadRequestLimits.isTrustedHost(""))
+        XCTAssertFalse(UploadRequestLimits.isTrustedHost("evil.com"))
+        XCTAssertFalse(UploadRequestLimits.isTrustedHost("attacker.example.org:80"))
+        XCTAssertFalse(UploadRequestLimits.isTrustedHost("epub-player.internal"))
+    }
+
+    // MARK: - Content-Type validation
+
+    func testAcceptedUploadContentTypes() {
+        XCTAssertTrue(UploadRequestLimits.isAcceptedUploadContentType("application/epub+zip"))
+        XCTAssertTrue(UploadRequestLimits.isAcceptedUploadContentType("application/octet-stream"))
+        XCTAssertTrue(UploadRequestLimits.isAcceptedUploadContentType("font/sfnt"))
+        XCTAssertTrue(UploadRequestLimits.isAcceptedUploadContentType("APPLICATION/EPUB+ZIP; charset=binary"))
+    }
+
+    func testRejectedUploadContentTypes() {
+        XCTAssertFalse(UploadRequestLimits.isAcceptedUploadContentType(nil))
+        XCTAssertFalse(UploadRequestLimits.isAcceptedUploadContentType(""))
+        XCTAssertFalse(UploadRequestLimits.isAcceptedUploadContentType("multipart/form-data; boundary=x"))
+        XCTAssertFalse(UploadRequestLimits.isAcceptedUploadContentType("text/plain"))
+    }
+
+    // MARK: - Upload target path
+
+    func testUploadTargetRequiresExactPath() {
+        func request(_ target: String) -> HTTPUploadRequest? {
+            HTTPUploadRequest.parse(headerData: Data("POST \(target) HTTP/1.1\r\nContent-Length: 1\r\n\r\n".utf8))
+        }
+        XCTAssertEqual(request("/upload?filename=x.epub")?.isUploadTarget, true)
+        XCTAssertEqual(request("/upload")?.isUploadTarget, true)
+        XCTAssertEqual(request("/uploadxyz")?.isUploadTarget, false)
+        XCTAssertEqual(request("/api/books")?.isUploadTarget, false)
+    }
+
     // MARK: - constantTimeEquals
 
     func testConstantTimeEqualsMatchesIdenticalStrings() {

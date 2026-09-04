@@ -120,6 +120,8 @@ final class UploadServerController: ObservableObject {
     @Published private(set) var totalImportCount = 0
     @Published var manualImportErrorMessage: String?
 
+    private static let maxRecentUploads = 100
+
     private var server: LocalUploadServer?
     private var pendingImports: [PendingImport] = []
     private var importTask: Task<Void, Never>?
@@ -238,6 +240,16 @@ final class UploadServerController: ObservableObject {
         // The current item bails cooperatively; partial files are reclaimed by
         // the stale-partial sweep on the next start.
         importTask?.cancel()
+        // Queued uploads that finished transferring but never imported have a
+        // file sitting in Uploads/. Dropping the queue without deleting them
+        // leaks the file: it has an un-prefixed name so the `.upload-` stale
+        // sweep never reclaims it. Only upload-sourced files are ours to delete;
+        // manual imports point at caller-owned URLs.
+        for pendingImport in pendingImports {
+            if case .upload = pendingImport.source {
+                try? FileManager.default.removeItem(at: pendingImport.sourceURL)
+            }
+        }
         pendingImports = []
         activeUploads = []
         status = .stopped
@@ -343,6 +355,11 @@ final class UploadServerController: ObservableObject {
                 if case .upload(let uploadID) = pendingImport.source {
                     removeActiveUpload(id: uploadID)
                     recentUploads.insert(UploadRecord(filename: pendingImport.filename, date: Date()), at: 0)
+                    // Bound the history so a long-lived server session can't grow
+                    // it without limit.
+                    if recentUploads.count > Self.maxRecentUploads {
+                        recentUploads.removeLast(recentUploads.count - Self.maxRecentUploads)
+                    }
                 }
             } catch {
                 if case .upload(let uploadID) = pendingImport.source {
@@ -501,7 +518,7 @@ final class UploadServerController: ObservableObject {
             }
             try BookAssetCacheService.removeAllCachedAssets(for: book.id)
         } catch {
-            print("UploadServerController: failed to remove files for \(book.originalFilename): \(error)")
+            DebugLog.shared.log("UploadServerController: failed to remove files for \(book.originalFilename): \(error)")
         }
         store.removeBook(id: book.id)
         store.persistNow()
@@ -517,9 +534,14 @@ final class UploadServerController: ObservableObject {
     private func epubFilename(from filename: String) throws -> String {
         let trimmedFilename = filename.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedFilename.isEmpty,
+              !trimmedFilename.hasPrefix("."),
               !trimmedFilename.contains("/"),
               !trimmedFilename.contains("\\"),
-              let sanitized = AppStorage.sanitizedFilenameOrNil(trimmedFilename)
+              let sanitized = AppStorage.sanitizedFilenameOrNil(trimmedFilename),
+              // Sanitisation can't reintroduce a leading dot, but guard the
+              // result too: a dot-prefixed name is hidden by the library scan
+              // (`.skipsHiddenFiles`) and then deleted as a stale `.import-*`.
+              !sanitized.hasPrefix(".")
         else {
             throw LocalLibraryError.invalidFilename
         }

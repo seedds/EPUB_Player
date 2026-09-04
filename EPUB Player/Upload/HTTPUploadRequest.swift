@@ -42,6 +42,13 @@ struct HTTPUploadRequest {
         )
     }
 
+    /// The upload endpoint is exactly `/upload`. A prefix match (`hasPrefix`)
+    /// treated `/uploadxyz` as an upload target and answered 415 instead of the
+    /// correct 404.
+    var isUploadTarget: Bool {
+        URLComponents(string: "http://localhost\(target)")?.path == "/upload"
+    }
+
     var uploadFilename: String? {
         guard let components = URLComponents(string: "http://localhost\(target)"), components.path == "/upload" else {
             return nil

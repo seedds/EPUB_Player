@@ -269,6 +269,62 @@ enum UploadRequestLimits {
     static func wouldExhaustDisk(contentLength: Int64, availableBytes: Int64) -> Bool {
         contentLength > availableBytes - requiredFreeSpaceMargin
     }
+
+    /// A Host header this LAN device trusts: a bare IPv4/IPv6 literal, a
+    /// `.local` mDNS name, or `localhost`, optionally with a port. Anything
+    /// else (a real domain) means the request arrived via DNS rebinding.
+    static func isTrustedHost(_ host: String?) -> Bool {
+        guard let host, !host.isEmpty else {
+            // No Host at all is HTTP/1.0-style; treat as untrusted since every
+            // legitimate client here is a modern browser sending one.
+            return false
+        }
+
+        // Strip a trailing :port. IPv6 literals are bracketed as `[::1]:80`.
+        let hostname: String
+        if host.hasPrefix("[") {
+            guard let closing = host.firstIndex(of: "]") else { return false }
+            hostname = String(host[host.index(after: host.startIndex)..<closing])
+        } else if let colon = host.lastIndex(of: ":"), !host.contains("::") {
+            hostname = String(host[..<colon])
+        } else {
+            hostname = host
+        }
+
+        if hostname.hasSuffix(".local") || hostname == "localhost" {
+            return true
+        }
+
+        var v4 = in_addr()
+        if hostname.withCString({ inet_pton(AF_INET, $0, &v4) }) == 1 {
+            return true
+        }
+        var v6 = in6_addr()
+        if hostname.withCString({ inet_pton(AF_INET6, $0, &v6) }) == 1 {
+            return true
+        }
+        return false
+    }
+
+    /// Whether a request `Content-Type` names a body we accept. The charset/
+    /// parameters after `;` are ignored. `application/octet-stream` is allowed
+    /// because some clients send it for binary uploads; the filename extension
+    /// is still validated separately.
+    static func isAcceptedUploadContentType(_ contentType: String?) -> Bool {
+        guard let contentType else { return false }
+        let base = contentType
+            .split(separator: ";", maxSplits: 1).first
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() } ?? ""
+        switch base {
+        case "application/epub+zip",
+             "application/octet-stream",
+             "font/ttf", "font/otf", "font/sfnt",
+             "application/x-font-ttf", "application/x-font-otf":
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 // Single source of truth for which file types the upload pipeline accepts;
@@ -311,12 +367,38 @@ private final class HTTPUploadConnection {
     private var uploadStartedAt: Date?
     private var expectedBodyLength: Int64 = 0
     private var receivedBodyLength: Int64 = 0
+    private var lastProgressReportedAt = Date.distantPast
     private var idleTimer: DispatchSourceTimer?
     private var queue: DispatchQueue?
+    // A connection responds once and cleans up once. Without these guards a
+    // late idle-timer fire, a doubled send completion, or the `.cancelled`
+    // state handler running after `finish` could send a second response on the
+    // same socket or invoke `onComplete` twice.
+    private var didRespond = false
+    private var didCleanup = false
+    // Set once the request line is parsed. A HEAD response carries the headers
+    // (including the real Content-Length) but no body.
+    private var isHeadRequest = false
 
     init(connection: NWConnection, authConfig: UploadServerAuthConfig) {
         self.connection = connection
         self.authConfig = authConfig
+    }
+
+    /// Runs `work` on the connection's queue. Library-API completions are
+    /// delivered from a `Task { @MainActor }`, so they must hop back here before
+    /// touching connection state that is otherwise queue-confined.
+    private func onQueue(_ work: @escaping () -> Void) {
+        guard let queue else {
+            work()
+            return
+        }
+        queue.async(execute: work)
+    }
+
+    private func stopIdleTimer() {
+        idleTimer?.cancel()
+        idleTimer = nil
     }
 
     func start(queue: DispatchQueue) {
@@ -398,6 +480,15 @@ private final class HTTPUploadConnection {
         let target = request.target
         let headers = request.headers
 
+        // Reject cross-origin/DNS-rebinding requests: a browser pointed at an
+        // attacker domain that resolves to this device could otherwise reach the
+        // rename/delete endpoints. Only a raw IP literal or a `.local` name is a
+        // legitimate Host for a LAN device with no registered domain.
+        guard UploadRequestLimits.isTrustedHost(headers["host"]) else {
+            finishWithHTTP(status: 403, body: "Forbidden")
+            return
+        }
+
         // Auth: POST /api/auth is the one unauthenticated route (besides the
         // login page served below). Everything else requires a valid token when
         // a password is configured.
@@ -405,6 +496,8 @@ private final class HTTPUploadConnection {
             handleAuthRequest(headers: headers)
             return
         }
+
+        isHeadRequest = method == "HEAD"
 
         // GET / is always served — it contains both the login card and the
         // upload UI; the page itself decides which to show based on the token
@@ -436,7 +529,7 @@ private final class HTTPUploadConnection {
             return
         }
 
-        guard target.hasPrefix("/upload") else {
+        guard request.isUploadTarget else {
             finishWithHTTP(status: 404, body: "Not Found")
             return
         }
@@ -446,13 +539,26 @@ private final class HTTPUploadConnection {
             return
         }
 
-        guard headers["transfer-encoding"]?.lowercased() != "chunked" else {
+        // `contains("chunked")` rather than an exact match: a value such as
+        // "gzip, chunked" also uses chunked framing and would otherwise slip
+        // past an equality check, leaving the framing bytes in the stored file.
+        guard headers["transfer-encoding"]?.lowercased().contains("chunked") != true else {
             finishWithHTTP(status: 411, body: "Chunked uploads are not supported")
             return
         }
 
-        guard let lengthText = headers["content-length"], let contentLength = Int64(lengthText), contentLength >= 0 else {
-            finishWithHTTP(status: 411, body: "Content-Length is required")
+        guard let lengthText = headers["content-length"], let contentLength = Int64(lengthText), contentLength > 0 else {
+            // A missing, non-numeric, or zero Content-Length would otherwise
+            // store a zero-byte file and report success.
+            finishWithHTTP(status: 411, body: "A non-empty Content-Length is required")
+            return
+        }
+
+        // Require a body content type that matches an accepted upload kind. A
+        // multipart/form-data body (from a stray `<form>` or `curl -F`) would
+        // otherwise be stored verbatim, MIME boundaries and all.
+        guard UploadRequestLimits.isAcceptedUploadContentType(headers["content-type"]) else {
+            finishWithHTTP(status: 415, body: "Unsupported Content-Type")
             return
         }
 
@@ -530,13 +636,21 @@ private final class HTTPUploadConnection {
         unavailableMessage: String,
         invoke: (@escaping APICompletion) -> Void?
     ) {
+        // The handler completes from `Task { @MainActor }`, which can take an
+        // arbitrarily long time; stop the idle timer so it can't fire a spurious
+        // 500 mid-round-trip, and hop the result back onto the connection queue
+        // before touching connection state.
+        stopIdleTimer()
+
         let completion: APICompletion = { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let data):
-                self.finishWithJSON(data)
-            case .failure(let error):
-                self.finishWithHTTP(status: 400, body: error.localizedDescription)
+            self?.onQueue {
+                guard let self else { return }
+                switch result {
+                case .success(let data):
+                    self.finishWithJSON(data)
+                case .failure(let error):
+                    self.finishWithHTTP(status: 400, body: error.localizedDescription)
+                }
             }
         }
 
@@ -622,8 +736,17 @@ private final class HTTPUploadConnection {
         try uploadFileHandle?.write(contentsOf: dataToWrite)
         receivedBodyLength += Int64(dataToWrite.count)
 
-        if let snapshot = currentUploadSnapshot() {
-            onUploadProgress?(snapshot)
+        // Each 64 KB chunk otherwise hops to the main actor and replaces a
+        // @Published array, so a fast upload floods SwiftUI with redundant
+        // updates. Emit at most ~10 Hz, but always emit the final chunk so the
+        // UI settles at 100%.
+        let now = Date()
+        let isComplete = receivedBodyLength >= expectedBodyLength
+        if isComplete || now.timeIntervalSince(lastProgressReportedAt) >= 0.1 {
+            lastProgressReportedAt = now
+            if let snapshot = currentUploadSnapshot() {
+                onUploadProgress?(snapshot)
+            }
         }
     }
 
@@ -664,10 +787,23 @@ private final class HTTPUploadConnection {
     }
 
     private func finish(status: Int, contentType: String, body: Data) {
+        // A connection answers exactly once. A second call (e.g. idle timer
+        // firing after the real response) must not put another response on the
+        // wire.
+        guard !didRespond else { return }
+        didRespond = true
+        stopIdleTimer()
+
         let reason = reasonPhrase(for: status)
-        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        // `nosniff` stops a browser from MIME-sniffing an error body that echoes
+        // a client-supplied filename into an executable type.
+        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n"
         var response = Data(header.utf8)
-        response.append(body)
+        // A HEAD response carries the headers (including the real Content-Length)
+        // but never a body.
+        if !isHeadRequest {
+            response.append(body)
+        }
 
         connection.send(content: response, completion: .contentProcessed { [weak self] _ in
             self?.connection.cancel()
@@ -688,8 +824,12 @@ private final class HTTPUploadConnection {
     }
 
     private func cleanup() {
-        idleTimer?.cancel()
-        idleTimer = nil
+        // `cancel()` calls this and the `.cancelled` state handler calls it
+        // again once the socket tears down; run the teardown (and `onComplete`)
+        // exactly once.
+        guard !didCleanup else { return }
+        didCleanup = true
+        stopIdleTimer()
         try? uploadFileHandle?.close()
         uploadFileHandle = nil
         // A temp URL still set here means the upload never completed (the
@@ -724,12 +864,14 @@ private final class HTTPUploadConnection {
         case 200: "OK"
         case 400: "Bad Request"
         case 401: "Unauthorized"
+        case 403: "Forbidden"
         case 404: "Not Found"
         case 405: "Method Not Allowed"
         case 411: "Length Required"
         case 413: "Payload Too Large"
         case 415: "Unsupported Media Type"
         case 500: "Internal Server Error"
+        case 507: "Insufficient Storage"
         default: "HTTP Response"
         }
     }
