@@ -53,10 +53,13 @@ struct HTTPUploadRequest {
         guard let components = URLComponents(string: "http://localhost\(target)"), components.path == "/upload" else {
             return nil
         }
+        // A name that sanitises to nothing (e.g. `%20%20`) must be rejected,
+        // not defaulted: `sanitizedFilename`'s "upload.epub" fallback would
+        // accept arbitrary bytes as an EPUB upload.
         return components.queryItems?
             .first(where: { $0.name == "filename" })?
             .value
-            .map(AppStorage.sanitizedFilename)
+            .flatMap(AppStorage.sanitizedFilenameOrNil)
     }
 
     var renameRequest: (bookId: UUID, filename: String)? {
