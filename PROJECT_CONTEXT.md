@@ -37,7 +37,7 @@
 - Updated the upload/storage messaging in the UI and README to reflect `Documents/Books` and `Documents/Cache`.
 - Built successfully after the refactor.
 - Changes have been committed and pushed to GitHub.
-- Added an XCTest suite (17 test files plus 3 helpers in `EPUB PlayerTests/`) covering
+- Added an XCTest suite (18 test files plus 3 helpers in `EPUB PlayerTests/`) covering
   persistence, storage paths, import/refresh, position validation, archive and XML
   hardening, the upload server, playback, and reader logic. CI runs it on every
   push and PR to `main` (`.github/workflows/ci.yml`).
@@ -133,10 +133,21 @@
   - EPUB reading UI built around Readium navigator.
   - Applies theme/typography settings from `AppStateStore`.
   - Coordinates playback, location persistence, chapter navigation, and highlight rendering.
+  - Its self-contained sub-views live beside it: `ReaderContentsScreen.swift` (chapters /
+    bookmarks / history), `MediaOverlayPlaybackBar.swift` (transport bar and the speed and
+    typography panels), and `EPUBNavigatorHost.swift` (the `UIViewControllerRepresentable`
+    wrapper, boundary-pan gesture, and tap-to-play script bridge).
 
 - `EPUB Player/Services/BookImportService.swift`
-  - Handles EPUB import, library refresh, cover regeneration, and overlay preparation scheduling.
-  - Contains `BookAssetCacheService` and `MediaOverlayPreparationCoordinator`.
+  - Handles EPUB import, library refresh, and cover regeneration.
+
+- `EPUB Player/Services/BookAssetCacheService.swift`
+  - Cover, overlay-manifest, and audio-cache files for a book: staging, commit, removal, and
+    the two overlay gates (`hasOverlayManifest`, cheap; `overlayCacheIsValid`, a detached decode).
+
+- `EPUB Player/Services/MediaOverlayPreparationCoordinator.swift`
+  - Schedules and tracks media-overlay preparation per book, with the content-generation and
+    task-identity guards that keep a superseded preparation from publishing.
 
 - `EPUB Player/Upload/UploadServerController.swift`
   - Owns the upload server state machine and import queue.
@@ -182,6 +193,8 @@
   - Loads overlay clip manifests.
   - Materializes audio assets into cache.
   - Controls `AVPlayer` playback, jumping, resume, and auto-advance.
+  - Owns the audio session and the screen-awake (`isIdleTimerDisabled`) flag, both keyed off
+    its own `state`; views only react to `state`.
 
 ### How Components Interact
 - `EPUBPlayerApp` creates `AppStateStore` and injects it into the SwiftUI hierarchy.
@@ -256,6 +269,12 @@
 - If `state.json` is entirely unreadable, it is moved aside to
   `Documents/Cache/state-corrupt-<timestamp>.json` before defaults are used, so the
   original is never silently overwritten.
+- `AppStateStore.books` is insertion-ordered; `sortedBooks` (cached, invalidated only by
+  `books`, `booksSortOption`, and a book's title/author/importedAt) is the library order the
+  UI and the upload server's `/api/books` both use.
+- If a `state.json` record fails to decode it is dropped from memory, and the file is copied
+  aside once as `Documents/Cache/state-partial-<timestamp>.json` before the next save
+  overwrites it.
 - `Book.coverImagePath` and `Book.mediaOverlayJSONPath` are stored as filenames relative to cache directories, not full paths.
 - `Book.epubFilePath` should be treated as a stored relative path under `Documents`, typically `Books/<filename>`.
 
@@ -308,24 +327,23 @@
 - Should the upload server's rename/delete endpoints require a password rather than defaulting to open?
 - Is additional runtime validation needed for Files app visibility and deletion/reset behavior on real devices?
 
-### Deferred from the 2026-09-04 code review (see CODE_REVIEW.md)
-The first-pass fixes (HIGH bugs A1–A5, dead-code/ablation B1–B2) landed. Still open:
-- **MEDIUM (A6–A21):** `state.json` load conflates I/O failure with corruption (A6);
-  overlay manifest commit reads whole file on main (A7); seamless auto-advance gated on a
-  log-string prefix (A8); bookmark/history snapshot mixes visible page with playing clip
-  (A9); upload connection state touched from two queues / double `cleanup()` (A10); upload
-  request validation gaps — no Content-Type/Host checks, zero-length accepted (A11);
-  completed-but-unimported uploads leak (A12); dot-prefixed rename hides then deletes a
-  book (A13); refresh discards per-file errors and mislabels cancellation (A14);
-  half-applied import on cover-commit failure (A15); bounded decompression bypassable by a
-  lying ZIP header (A16); `containedFileURL` returns the base directory for an empty stored
-  path (A17); `ClipLocationMatcher` re-normalises hrefs per lookup (A18); `narratedTimeline`
-  can cache a stale book's timeline (A19); upload progress hops main per 64 KB chunk (A20);
-  idle timer can stay disabled after the reader is gone (A21).
-- **A22 (needs on-device confirmation):** `shouldClearSavedClip` may clear the resume point
-  after a successful mid-session overlay reload; verify on device before changing.
-- **LOW / remaining B3–B4:** assorted duplicate predicates and structural collapses listed
-  in CODE_REVIEW.md §B3–B4 and the LOW bullet list.
+### Code reviews (see CODE_REVIEW.md)
+The 2026-09-04 review (A1–A21, B1–B4) and the 2026-09-10 second pass (its own A1–A12,
+B1–B16) have both landed. Still open, all LOW and recorded only:
+- `LocalUploadServer`: a `.waiting` listener state stops the server permanently (transient
+  local-network permission prompts land here).
+- `ReaderView`: `.onChange(of: playback.clips)` compares the whole clip array on every body
+  pass; the per-clip-change debug log line interpolates eight values unconditionally.
+- `MediaOverlayPlaybackController.audioDuration` extracts a whole audio file to learn its
+  duration when the SMIL omits `clipEnd` on the last clip of that file.
+- Upload password stored in cleartext in `state.json`; rename/delete unauthenticated when no
+  password is set (the Host check blocks DNS rebinding).
+- `Book` is `nonisolated` with `MainActor.assumeIsolated` in the store observer; every
+  mutation site is main-actor today, but the compiler does not enforce it.
+- **A22 from the first review (needs on-device confirmation):** `shouldClearSavedClip` may
+  clear the resume point after a successful mid-session overlay reload.
+- Second-pass items that still want a device check: a Sepia/Gray background surviving an
+  app switch under the System theme; auto-lock returning after a two-level pop while playing.
 
 ## 8. Next Steps
 
@@ -385,7 +403,7 @@ The first-pass fixes (HIGH bugs A1–A5, dead-code/ablation B1–B2) landed. Sti
 - Current state when this file was last updated:
   - code changes committed and pushed
   - simulator build succeeded
-  - test suite passing (17 test files + 3 helpers)
+  - test suite passing (18 test files + 3 helpers)
   - manual fresh-install runtime verification still pending
 
 Section 4's file paths, section 7's risks, and this snapshot are the parts most likely
