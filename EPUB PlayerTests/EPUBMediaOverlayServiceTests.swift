@@ -65,10 +65,10 @@ final class EPUBMediaOverlayServiceTests: XCTestCase {
         let url = try ZIPFixtureBuilder.write(epub, named: "overlay.epub")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
-        let bookID = UUID()
-        let result = try await EPUBMediaOverlayService.parseAndWrite(at: url, bookID: bookID)
+        let jsonURL = tempDocumentsDirectory.appendingPathComponent("overlay.json", isDirectory: false)
+        let written = try await EPUBMediaOverlayService.parseAndWrite(at: url, destinationURL: jsonURL)
 
-        let manifest = try XCTUnwrap(result?.manifest)
+        let manifest = try XCTUnwrap(written)
         XCTAssertEqual(manifest.documents.count, 1)
         // The refines-scoped duration must not overwrite the publication total.
         XCTAssertEqual(manifest.duration, 5.5)
@@ -82,8 +82,7 @@ final class EPUBMediaOverlayServiceTests: XCTestCase {
         XCTAssertEqual(clips[0].textResourceHref, "OEBPS/chapter1.xhtml")
         XCTAssertEqual(clips[0].audioPath, "OEBPS/audio.mp3")
 
-        // The manifest JSON must land in the cache and round-trip.
-        let jsonURL = try XCTUnwrap(result?.jsonURL)
+        // The manifest JSON must land at the destination and round-trip.
         let decoded = try JSONDecoder().decode(
             EPUBMediaOverlayManifest.self,
             from: Data(contentsOf: jsonURL)
@@ -139,8 +138,9 @@ final class EPUBMediaOverlayServiceTests: XCTestCase {
         let url = try ZIPFixtureBuilder.write(epub, named: "spine-order.epub")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
-        let result = try await EPUBMediaOverlayService.parseAndWrite(at: url, bookID: UUID())
-        let manifest = try XCTUnwrap(result?.manifest)
+        let jsonURL = tempDocumentsDirectory.appendingPathComponent("spine-order.json", isDirectory: false)
+        let written = try await EPUBMediaOverlayService.parseAndWrite(at: url, destinationURL: jsonURL)
+        let manifest = try XCTUnwrap(written)
 
         let orderedFragments = manifest.documents.flatMap(\.clips).map(\.fragmentID)
         XCTAssertEqual(

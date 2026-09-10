@@ -49,11 +49,6 @@ struct EPUBArchive {
         }
     }
 
-    static func validateEPUB(at url: URL) async throws {
-        let archive = try await EPUBArchive(url: url)
-        try await archive.validateEPUB()
-    }
-
     func validateEPUB() async throws {
         guard let mimetypeData = try await data(for: "mimetype"),
               String(data: mimetypeData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == "application/epub+zip",
