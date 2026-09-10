@@ -65,6 +65,10 @@ private struct PersistedAppState: Codable {
     var uploadServerRequiresPassword: Bool
     var uploadServerPassword: String
     var booksSortOptionRawValue: String
+    /// Records that failed to decode and were dropped (not persisted; not in
+    /// `CodingKeys`). Lets `loadState` back the file up before the next save
+    /// overwrites the lost records.
+    var droppedRecordCount = 0
 
     private enum CodingKeys: String, CodingKey {
         case books
@@ -110,13 +114,15 @@ extension PersistedAppState {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = PersistedAppState.default
-        books = container.decodeValue([FailableDecodable<Book>].self, forKey: .books, default: [])
-            .compactMap(\.value)
-        customFontFamilies = container.decodeValue(
+        let decodedBooks = container.decodeValue([FailableDecodable<Book>].self, forKey: .books, default: [])
+        books = decodedBooks.compactMap(\.value)
+        let decodedFamilies = container.decodeValue(
             [FailableDecodable<CustomFontStore.ImportedFontFamily>].self,
             forKey: .customFontFamilies,
             default: []
-        ).compactMap(\.value)
+        )
+        customFontFamilies = decodedFamilies.compactMap(\.value)
+        droppedRecordCount = (decodedBooks.count - books.count) + (decodedFamilies.count - customFontFamilies.count)
         fontSize = container.decodeValue(Double.self, forKey: .fontSize, default: defaults.fontSize)
         lineHeight = container.decodeValue(Double.self, forKey: .lineHeight, default: defaults.lineHeight)
         fontFamilyRawValue = container.decodeValue(String.self, forKey: .fontFamilyRawValue, default: defaults.fontFamilyRawValue)
@@ -280,6 +286,15 @@ final class AppStateStore: ObservableObject {
         switch readPersistedState() {
         case .loaded(let persistedState):
             canPersistState = true
+            if persistedState.droppedRecordCount > 0 {
+                // The dropped records are gone from memory and will be gone
+                // from disk at the next save. Keep a copy so a schema slip or
+                // one bad record never destroys bookmarks and progress silently.
+                DebugLog.shared.log(
+                    "AppStateStore: dropped \(persistedState.droppedRecordCount) undecodable record(s) from state.json; backing it up"
+                )
+                _ = backUpStateFile(label: "partial", move: false)
+            }
             applyPersistedState(persistedState)
         case .missing:
             canPersistState = true
@@ -294,14 +309,16 @@ final class AppStateStore: ObservableObject {
         case .corrupt:
             // The file is unrecoverable as app state. Move it aside for recovery
             // and only allow overwriting once it has been safely backed up.
-            canPersistState = backUpUnreadableStateFile()
+            canPersistState = backUpStateFile(label: "corrupt", move: true)
             applyPersistedState(.default)
         }
 
         configureBookSubscriptions()
     }
 
-    private func backUpUnreadableStateFile() -> Bool {
+    /// Copies (or moves) state.json aside as `state-<label>-<timestamp>.json`.
+    /// Returns whether the file is now safe to overwrite.
+    private func backUpStateFile(label: String, move: Bool) -> Bool {
         guard let stateURL = try? AppStorage.stateURL() else {
             return false
         }
@@ -314,10 +331,14 @@ final class AppStateStore: ObservableObject {
             .replacingOccurrences(of: ":", with: "-")
         let backupURL = stateURL
             .deletingLastPathComponent()
-            .appendingPathComponent("state-corrupt-\(timestamp).json", isDirectory: false)
+            .appendingPathComponent("state-\(label)-\(timestamp).json", isDirectory: false)
 
         do {
-            try FileManager.default.moveItem(at: stateURL, to: backupURL)
+            if move {
+                try FileManager.default.moveItem(at: stateURL, to: backupURL)
+            } else {
+                try FileManager.default.copyItem(at: stateURL, to: backupURL)
+            }
             return true
         } catch {
             return false
