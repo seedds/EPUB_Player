@@ -237,15 +237,8 @@ final class AppStateStore: ObservableObject {
         cachedSortedBooks = nil
     }
 
-    func replaceBooks(_ books: [Book]) {
-        self.books = booksSortedByImportedAt(books)
-        configureBookSubscriptions()
-        scheduleSave()
-    }
-
     func addBook(_ book: Book) {
         books.append(book)
-        books = booksSortedByImportedAt(books)
         observeBook(book)
         scheduleSave()
     }
@@ -253,11 +246,6 @@ final class AppStateStore: ObservableObject {
     func removeBook(id: UUID) {
         books.removeAll { $0.id == id }
         bookSubscriptions[id] = nil
-        scheduleSave()
-    }
-
-    func sortBooksByImportedAt() {
-        books = booksSortedByImportedAt(books)
         scheduleSave()
     }
 
@@ -380,7 +368,7 @@ final class AppStateStore: ObservableObject {
     }
 
     private func applyPersistedState(_ persistedState: PersistedAppState) {
-        books = booksSortedByImportedAt(persistedState.books)
+        books = persistedState.books
         customFontFamilies = persistedState.customFontFamilies
         fontSize = persistedState.fontSize
         lineHeight = persistedState.lineHeight
@@ -430,88 +418,40 @@ final class AppStateStore: ObservableObject {
         bookSubscriptions[book.id] = [forwardChange, invalidateSort]
     }
 
+    /// `books` itself is unordered (insertion order); this is the one place the
+    /// library order is decided. Each option is a lazy chain of tie-breaks.
     private func isOrderedBefore(_ lhs: Book, _ rhs: Book, for option: BooksSortOption) -> Bool {
+        let title = { lhs.title.localizedCaseInsensitiveCompare(rhs.title) }
+        let author = { lhs.author.localizedCaseInsensitiveCompare(rhs.author) }
+        let newestFirst = { rhs.importedAt.compare(lhs.importedAt) }
+        let stableID = { lhs.id.uuidString.compare(rhs.id.uuidString) }
+
+        let decision: ComparisonResult
         switch option {
         case .recentlyAdded:
-            return compareRecentlyAdded(lhs, rhs)
+            decision = Self.firstDecisive(newestFirst, title, author, stableID)
         case .titleAscending:
-            return compareTitle(lhs, rhs, ascending: true)
+            decision = Self.firstDecisive(title, author, newestFirst, stableID)
         case .titleDescending:
-            return compareTitle(lhs, rhs, ascending: false)
+            decision = Self.firstDecisive({ title().reversed }, author, newestFirst, stableID)
         case .authorAscending:
-            return compareAuthor(lhs, rhs, ascending: true)
+            decision = Self.firstDecisive(author, title, newestFirst, stableID)
         case .authorDescending:
-            return compareAuthor(lhs, rhs, ascending: false)
+            decision = Self.firstDecisive({ author().reversed }, title, newestFirst, stableID)
         }
+        return decision == .orderedAscending
     }
 
-    private func compareRecentlyAdded(_ lhs: Book, _ rhs: Book) -> Bool {
-        if let decision = descendingDecision(lhs.importedAt, rhs.importedAt) {
-            return decision
+    /// The first comparison that is not `.orderedSame`, evaluated lazily so the
+    /// localized string compares only run when an earlier key ties.
+    private static func firstDecisive(_ comparisons: (() -> ComparisonResult)...) -> ComparisonResult {
+        for comparison in comparisons {
+            let result = comparison()
+            if result != .orderedSame {
+                return result
+            }
         }
-        if let decision = ascendingDecision(lhs.title, rhs.title) {
-            return decision
-        }
-        if let decision = ascendingDecision(lhs.author, rhs.author) {
-            return decision
-        }
-        return lhs.id.uuidString < rhs.id.uuidString
-    }
-
-    private func compareTitle(_ lhs: Book, _ rhs: Book, ascending: Bool) -> Bool {
-        if let decision = stringDecision(lhs.title, rhs.title, ascending: ascending) {
-            return decision
-        }
-        if let decision = ascendingDecision(lhs.author, rhs.author) {
-            return decision
-        }
-        if let decision = descendingDecision(lhs.importedAt, rhs.importedAt) {
-            return decision
-        }
-        return lhs.id.uuidString < rhs.id.uuidString
-    }
-
-    private func compareAuthor(_ lhs: Book, _ rhs: Book, ascending: Bool) -> Bool {
-        if let decision = stringDecision(lhs.author, rhs.author, ascending: ascending) {
-            return decision
-        }
-        if let decision = ascendingDecision(lhs.title, rhs.title) {
-            return decision
-        }
-        if let decision = descendingDecision(lhs.importedAt, rhs.importedAt) {
-            return decision
-        }
-        return lhs.id.uuidString < rhs.id.uuidString
-    }
-
-    private func stringDecision(_ lhs: String, _ rhs: String, ascending: Bool) -> Bool? {
-        let comparison = lhs.localizedCaseInsensitiveCompare(rhs)
-        switch comparison {
-        case .orderedAscending:
-            return ascending
-        case .orderedDescending:
-            return !ascending
-        case .orderedSame:
-            return nil
-        }
-    }
-
-    private func ascendingDecision(_ lhs: String, _ rhs: String) -> Bool? {
-        stringDecision(lhs, rhs, ascending: true)
-    }
-
-    private func descendingDecision(_ lhs: Date, _ rhs: Date) -> Bool? {
-        if lhs > rhs {
-            return true
-        }
-        if lhs < rhs {
-            return false
-        }
-        return nil
-    }
-
-    private func booksSortedByImportedAt(_ books: [Book]) -> [Book] {
-        books.sorted { $0.importedAt > $1.importedAt }
+        return .orderedSame
     }
 
     private func currentPersistedState() -> PersistedAppState {
@@ -591,3 +531,13 @@ extension AppStateStore {
     var test_sortComputeCount: Int { sortComputeCount }
 }
 #endif
+
+private extension ComparisonResult {
+    var reversed: ComparisonResult {
+        switch self {
+        case .orderedAscending: .orderedDescending
+        case .orderedDescending: .orderedAscending
+        case .orderedSame: .orderedSame
+        }
+    }
+}
