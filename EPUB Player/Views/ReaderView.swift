@@ -335,7 +335,7 @@ struct ReaderView: View {
         case .pending, .processing:
             return true
         case .ready:
-            return !BookAssetCacheService.hasValidOverlayCache(for: book)
+            return !BookAssetCacheService.hasOverlayManifest(for: book)
         }
     }
 

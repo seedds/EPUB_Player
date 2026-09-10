@@ -253,8 +253,11 @@ enum BookImportService {
                         existingBook.mediaOverlayPreparationError = nil
                     }
 
-                    if !BookAssetCacheService.hasValidOverlayCache(for: existingBook) &&
-                        (existingBook.mediaOverlayClipCount ?? 0) > 0 {
+                    // Repair gate: a manifest that exists but no longer decodes
+                    // must be regenerated. The decode runs off the main actor;
+                    // this is evaluated once per existing book on every refresh.
+                    if (existingBook.mediaOverlayClipCount ?? 0) > 0,
+                       !(await BookAssetCacheService.overlayCacheIsValid(for: existingBook)) {
                         existingBook.mediaOverlayPreparationState = .pending
                         existingBook.mediaOverlayPreparationError = nil
                         existingBook.mediaOverlayJSONPath = nil
@@ -278,29 +281,38 @@ enum BookImportService {
                         prepareTask.cancel()
                     }
 
-                    // Two distinct on-disk names can sanitise to the same
-                    // destination. Renaming onto an existing, different file
-                    // would clobber another book, so skip this one instead.
-                    let destinationURL = preparedImport.stagedLibraryFile.destinationURL
-                    let isRename = sourceURL.standardizedFileURL.path != destinationURL.standardizedFileURL.path
-                    if isRename, fileManager.fileExists(atPath: destinationURL.path) {
-                        throw BookImportError.destinationNameCollision(filename)
-                    }
+                    // The prepared import holds a staged cover; any throw from
+                    // here on must remove it or it leaks in Cache/Covers (no
+                    // sweep covers that directory, and a brand-new UUID is never
+                    // reclaimed by a later commit).
+                    do {
+                        // Two distinct on-disk names can sanitise to the same
+                        // destination. Renaming onto an existing, different file
+                        // would clobber another book, so skip this one instead.
+                        let destinationURL = preparedImport.stagedLibraryFile.destinationURL
+                        let isRename = sourceURL.standardizedFileURL.path != destinationURL.standardizedFileURL.path
+                        if isRename, fileManager.fileExists(atPath: destinationURL.path) {
+                            throw BookImportError.destinationNameCollision(filename)
+                        }
 
-                    if let existingBook {
-                        await MediaOverlayPreparationCoordinator.shared.cancelAndWaitPreparation(for: existingBook.id)
-                        try Task.checkCancellation()
+                        if let existingBook {
+                            await MediaOverlayPreparationCoordinator.shared.cancelAndWaitPreparation(for: existingBook.id)
+                            try Task.checkCancellation()
+                        }
+                        // Route through applyPreparedImport (not upsertBook) so the
+                        // staged file is renamed to its sanitised destination and the
+                        // staged cover is promoted; upsertBook did neither, dropping
+                        // covers and leaving records pointing at unsanitised names.
+                        book = try applyPreparedImport(
+                            preparedImport,
+                            existingBookID: existingBook?.id,
+                            store: store,
+                            persist: false
+                        )
+                    } catch {
+                        cleanupPreparedImport(preparedImport)
+                        throw error
                     }
-                    // Route through applyPreparedImport (not upsertBook) so the
-                    // staged file is renamed to its sanitised destination and the
-                    // staged cover is promoted; upsertBook did neither, dropping
-                    // covers and leaving records pointing at unsanitised names.
-                    book = try applyPreparedImport(
-                        preparedImport,
-                        existingBookID: existingBook?.id,
-                        store: store,
-                        persist: false
-                    )
 
                     overlayRetryIDs.insert(book.id)
                 }
@@ -407,6 +419,8 @@ enum BookImportService {
         // The old overlay artifacts are stale once the EPUB content changed;
         // remove them only after the new EPUB is in place.
         try? BookAssetCacheService.removeOverlayArtifacts(for: preparedImport.id)
+        // New content may have a cover the previous file lacked.
+        booksKnownWithoutCover.remove(preparedImport.id)
 
         let book = upsertBook(
             from: preparedImport,
@@ -784,6 +798,13 @@ enum BookImportService {
         )
     }
 
+    /// Books whose EPUB was found to contain no cover during this session.
+    /// `restoreMissingCovers` runs on every scene activation; without this it
+    /// re-opened and re-parsed every cover-less EPUB each time the app came to
+    /// the foreground. Cleared for a book when new content is imported.
+    @MainActor
+    private static var booksKnownWithoutCover: Set<UUID> = []
+
     @MainActor
     static func restoreMissingCovers(store: AppStateStore) async {
         let books = store.books
@@ -792,7 +813,8 @@ enum BookImportService {
                 break
             }
 
-            guard !BookAssetCacheService.hasCachedCover(for: book),
+            guard !booksKnownWithoutCover.contains(book.id),
+                  !BookAssetCacheService.hasCachedCover(for: book),
                   let sourceURL = try? book.resolvedEPUBFileURL(),
                   FileManager.default.fileExists(atPath: sourceURL.path)
             else {
@@ -808,6 +830,9 @@ enum BookImportService {
             }
 
             guard let cachedCoverPath else {
+                // A successful parse that yielded no cover: the EPUB simply
+                // has none. Remember that instead of re-parsing next time.
+                booksKnownWithoutCover.insert(book.id)
                 continue
             }
 
@@ -985,7 +1010,7 @@ enum BookImportService {
     /// can run concurrently with an in-progress import (refresh has no lock on
     /// the import pipeline), so sweeping unconditionally could delete the only
     /// copy of a file that was *moved* rather than copied into staging.
-    private static let stalePartialImportAge: TimeInterval = 5 * 60
+    static let stalePartialImportAge: TimeInterval = 5 * 60
 
     /// Deletes dot-prefixed `.import-*` staging files orphaned in the library by
     /// an import that was cancelled or crashed between staging and commit.
@@ -1107,9 +1132,34 @@ enum BookAssetCacheService {
         return FileManager.default.fileExists(atPath: coverURL.path)
     }
 
+    /// Whether the book's cached manifest is present and non-empty. The cheap
+    /// gate for "is preparation done": it runs on the main actor at book open
+    /// and on every enqueue, where fully decoding a multi-megabyte manifest
+    /// stalled the UI. A manifest that exists but is corrupt surfaces at
+    /// playback load (`ReaderView.readAloudStatusMessage`) and is repaired by
+    /// the refresh gate (`overlayCacheIsValid`), so it need not be detected here.
     @MainActor
-    static func hasValidOverlayCache(for book: Book) -> Bool {
-        cachedOverlayClips(for: book)?.isEmpty == false
+    static func hasOverlayManifest(for book: Book) -> Bool {
+        guard let overlayURL = try? book.resolvedMediaOverlayJSONURL(),
+              let size = (try? overlayURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+        else {
+            return false
+        }
+        return size > 0
+    }
+
+    /// Whether the book's cached manifest exists *and* decodes to at least one
+    /// clip. The decode runs off the main actor: this is the refresh repair
+    /// gate, evaluated once per existing book, and a long audiobook's manifest
+    /// is megabytes of JSON.
+    @MainActor
+    static func overlayCacheIsValid(for book: Book) async -> Bool {
+        guard let overlayURL = try? book.resolvedMediaOverlayJSONURL() else {
+            return false
+        }
+        return await Task.detached(priority: .utility) {
+            (try? MediaOverlayPlaybackController.resolvedClips(from: overlayURL))?.isEmpty == false
+        }.value
     }
 
     @MainActor
@@ -1117,10 +1167,6 @@ enum BookAssetCacheService {
         guard let overlayURL = try? book.resolvedMediaOverlayJSONURL() else {
             return nil
         }
-        // Existence alone is insufficient: a corrupt or stale manifest is treated
-        // as ready and silently fails at playback load. Decode it (via the same
-        // path the playback controller uses) so re-preparation gates can detect
-        // an unusable cache and regenerate it.
         return try? MediaOverlayPlaybackController.resolvedClips(from: overlayURL)
     }
 
@@ -1156,6 +1202,17 @@ final class MediaOverlayPreparationCoordinator {
     private init() {}
 
     func resumePendingBooks(store: AppStateStore) {
+        // Reclaim dot-prefixed staged manifests (`.<bookID>-<generation>.json`)
+        // orphaned by a crash mid-preparation. The normal path removes them in
+        // a `defer`, so anything older than the staging age here is dead.
+        if let overlaysDirectory = try? AppStorage.mediaOverlaysDirectory() {
+            AppStorage.sweepStagingFiles(
+                in: overlaysDirectory,
+                prefix: ".",
+                olderThan: Date().addingTimeInterval(-BookImportService.stalePartialImportAge)
+            )
+        }
+
         let books = store.books
 
         for book in books {
@@ -1190,10 +1247,14 @@ final class MediaOverlayPreparationCoordinator {
             return
         }
         if book.mediaOverlayPreparationState == .ready,
-           BookAssetCacheService.hasValidOverlayCache(for: book) {
+           BookAssetCacheService.hasOverlayManifest(for: book) {
             return
         }
 
+        // The `.processing` transition is not forced to disk: the debounced
+        // save covers it, and `resumePendingBooks` treats a persisted
+        // `.processing` exactly like `.pending`, so a crash before the write
+        // resumes identically.
         book.mediaOverlayPreparationState = .processing
         book.mediaOverlayPreparationError = nil
         let contentGeneration = book.contentGeneration
@@ -1201,8 +1262,6 @@ final class MediaOverlayPreparationCoordinator {
             OperationProgress(fractionCompleted: 0, message: "Preparing read-aloud..."),
             for: bookID
         )
-        // Make the `.processing` transition durable before the long async parse.
-        store.persistNow()
 
         // Capture this task so the defer only clears the map entry when it still
         // belongs to THIS task. Without the identity check, a cancel +
@@ -1388,14 +1447,13 @@ final class MediaOverlayPreparationCoordinator {
         case .failed:
             return
         case .ready:
-            if BookAssetCacheService.hasValidOverlayCache(for: book) {
+            if BookAssetCacheService.hasOverlayManifest(for: book) {
                 // Any revalidation mutation schedules a debounced save.
                 _ = revalidatePendingClipPositionsAgainstCachedOverlay(for: book)
                 return
             }
             book.mediaOverlayPreparationState = .pending
             book.mediaOverlayPreparationError = nil
-            store.persistNow()
             fallthrough
         case .pending, .processing:
             enqueuePreparation(for: bookID, store: store, priority: .userInitiated)
@@ -1508,6 +1566,13 @@ extension MediaOverlayPreparationCoordinator {
         for task in activeTasks {
             await task.value
         }
+    }
+}
+
+extension BookImportService {
+    /// Whether `restoreMissingCovers` has recorded this book as having no cover.
+    static func test_isKnownWithoutCover(_ bookID: UUID) -> Bool {
+        booksKnownWithoutCover.contains(bookID)
     }
 }
 #endif

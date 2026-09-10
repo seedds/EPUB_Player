@@ -725,9 +725,10 @@ final class BookImportServiceTests: XCTestCase {
     func testRefreshSkipsSecondFileThatSanitisesToSameName() async throws {
         let booksDirectory = try AppStorage.booksDirectory()
 
-        // Both sanitise to `A-B.epub` (the disallowed char becomes `-`).
-        let first = try makeEPUBFile(named: "first.epub", title: "First Colliding")
-        let second = try makeEPUBFile(named: "second.epub", title: "Second Colliding")
+        // Both sanitise to `A-B.epub` (the disallowed char becomes `-`). Both
+        // carry covers so the skipped one has a staged cover to leak.
+        let first = try makeEPUBFileWithCover(named: "first.epub", title: "First Colliding", coverBytes: [0x89, 0x50, 1])
+        let second = try makeEPUBFileWithCover(named: "second.epub", title: "Second Colliding", coverBytes: [0x89, 0x50, 2])
         try FileManager.default.copyItem(at: first, to: booksDirectory.appendingPathComponent("A'B.epub"))
         try FileManager.default.copyItem(at: second, to: booksDirectory.appendingPathComponent("A#B.epub"))
         XCTAssertEqual(AppStorage.sanitizedFilename("A'B.epub"), AppStorage.sanitizedFilename("A#B.epub"))
@@ -735,6 +736,89 @@ final class BookImportServiceTests: XCTestCase {
         let refreshed = try await BookImportService.refreshBooksFromDocuments(store: store)
         XCTAssertEqual(refreshed.count, 1, "Only one of two colliding names may import")
         XCTAssertEqual(store.books.count, 1)
+
+        // The skipped file's staged cover must not be left behind: nothing
+        // sweeps Cache/Covers, and its UUID never gets a later commit.
+        let staged = try FileManager.default.contentsOfDirectory(atPath: try AppStorage.coversDirectory().path)
+            .filter { $0.contains(".import-") }
+        XCTAssertTrue(staged.isEmpty, "A skipped refresh import must clean up its staged cover: \(staged)")
+    }
+
+    func testResumePendingBooksSweepsStaleStagedManifests() throws {
+        let overlaysDirectory = try AppStorage.mediaOverlaysDirectory()
+        let stale = overlaysDirectory.appendingPathComponent(".\(UUID().uuidString)-\(UUID().uuidString).json")
+        let fresh = overlaysDirectory.appendingPathComponent(".\(UUID().uuidString)-\(UUID().uuidString).json")
+        let committed = overlaysDirectory.appendingPathComponent("\(UUID().uuidString).json")
+        for url in [stale, fresh, committed] {
+            try Data("{}".utf8).write(to: url)
+        }
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-3600)],
+            ofItemAtPath: stale.path
+        )
+
+        MediaOverlayPreparationCoordinator.shared.resumePendingBooks(store: store)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.path), "An old staged manifest must be reclaimed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path), "A staged manifest young enough to belong to a live preparation must be spared")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: committed.path), "Committed manifests must never be swept")
+    }
+
+    // MARK: - Overlay cache gates
+
+    func testHasOverlayManifestRequiresANonEmptyFile() throws {
+        let book = Book(title: "Gate", originalFilename: "gate.epub", epubFilePath: "Books/gate.epub")
+        XCTAssertFalse(BookAssetCacheService.hasOverlayManifest(for: book), "No stored path -> no manifest")
+
+        let manifestURL = try AppStorage.mediaOverlayManifestURL(for: book.id)
+        book.mediaOverlayJSONPath = manifestURL.lastPathComponent
+        XCTAssertFalse(BookAssetCacheService.hasOverlayManifest(for: book), "Missing file -> no manifest")
+
+        try Data().write(to: manifestURL)
+        XCTAssertFalse(BookAssetCacheService.hasOverlayManifest(for: book), "Empty file -> no manifest")
+
+        try Data("{}".utf8).write(to: manifestURL)
+        XCTAssertTrue(BookAssetCacheService.hasOverlayManifest(for: book))
+    }
+
+    func testOverlayCacheIsValidDecodesTheManifest() async throws {
+        let book = Book(title: "Gate", originalFilename: "gate.epub", epubFilePath: "Books/gate.epub")
+        let manifestURL = try AppStorage.mediaOverlayManifestURL(for: book.id)
+        book.mediaOverlayJSONPath = manifestURL.lastPathComponent
+
+        try Data("{}".utf8).write(to: manifestURL)
+        let corruptIsValid = await BookAssetCacheService.overlayCacheIsValid(for: book)
+        XCTAssertFalse(corruptIsValid, "A manifest that does not decode is not a valid cache")
+
+        let manifest = EPUBMediaOverlayManifest(documents: [
+            EPUBMediaOverlayDocument(clips: [
+                EPUBMediaOverlayClip(textResourceHref: "c.xhtml", fragmentID: "p1", audioPath: "a.mp3", clipBegin: 0, clipEnd: 1)
+            ])
+        ])
+        try JSONEncoder().encode(manifest).write(to: manifestURL)
+        let realIsValid = await BookAssetCacheService.overlayCacheIsValid(for: book)
+        XCTAssertTrue(realIsValid)
+    }
+
+    // MARK: - restoreMissingCovers remembers cover-less books
+
+    func testRestoreMissingCoversRemembersBooksWithoutACover() async throws {
+        let url = try makeEPUBFile(named: "nocover.epub", title: "No Cover")
+        let imported = try await BookImportService.importBook(from: url, filename: "nocover.epub", store: store)
+        let book = try XCTUnwrap(imported)
+        XCTAssertNil(book.coverImagePath)
+        XCTAssertFalse(BookImportService.test_isKnownWithoutCover(book.id))
+
+        await BookImportService.restoreMissingCovers(store: store)
+        XCTAssertTrue(
+            BookImportService.test_isKnownWithoutCover(book.id),
+            "A parse that found no cover must be remembered so every foreground does not re-open the EPUB"
+        )
+
+        // New content may carry a cover: re-importing clears the memo.
+        let withCover = try makeEPUBFileWithCover(named: "nocover2.epub", title: "Now Covered", coverBytes: [0x89, 0x50, 9])
+        _ = try await BookImportService.importBook(from: withCover, filename: "nocover.epub", store: store, existingBookStrategy: .overwrite)
+        XCTAssertFalse(BookImportService.test_isKnownWithoutCover(book.id))
     }
 
     func testProgressReporting() async throws {
