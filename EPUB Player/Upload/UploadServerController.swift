@@ -238,8 +238,13 @@ final class UploadServerController: ObservableObject {
         // Cancel any in-flight import and drop the queue so an import started
         // by the server does not keep running and mutating state after stop.
         // The current item bails cooperatively; partial files are reclaimed by
-        // the stale-partial sweep on the next start.
+        // the stale-partial sweep on the next start. Clear the handle too:
+        // `startImportProcessing` treats a non-nil task as "already running",
+        // and a cancelled task can take seconds to unwind (mid-copy of a large
+        // EPUB), during which a fresh upload would otherwise be queued but
+        // never picked up.
         importTask?.cancel()
+        importTask = nil
         // Queued uploads that finished transferring but never imported have a
         // file sitting in Uploads/. Dropping the queue without deleting them
         // leaks the file: it has an un-prefixed name so the `.upload-` stale
@@ -304,22 +309,28 @@ final class UploadServerController: ObservableObject {
             return
         }
 
-        importTask = Task { @MainActor [weak self] in
-            await self?.processPendingImports(store: store)
+        // Capture the task so the trailing reset only runs when this task is
+        // still the tracked one. A task cancelled by `stop()` and superseded by
+        // a new `start()` + upload must not nil the newer task's handle or
+        // zero its progress state while it is mid-import.
+        var thisTask: Task<Void, Never>?
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.processPendingImports(store: store)
+            guard self.importTask == thisTask else { return }
+            self.importTask = nil
+            self.isImportingBooks = false
+            self.importProgress = 0
+            self.importStatus = ""
+            self.currentImportFilename = nil
+            self.completedImportCount = 0
+            self.totalImportCount = 0
         }
+        thisTask = task
+        importTask = task
     }
 
     private func processPendingImports(store: AppStateStore) async {
-        defer {
-            importTask = nil
-            isImportingBooks = false
-            importProgress = 0
-            importStatus = ""
-            currentImportFilename = nil
-            completedImportCount = 0
-            totalImportCount = 0
-        }
-
         while !pendingImports.isEmpty {
             if Task.isCancelled {
                 break
@@ -584,3 +595,11 @@ final class UploadServerController: ObservableObject {
         return address
     }
 }
+
+#if DEBUG
+extension UploadServerController {
+    /// Whether an import task is currently tracked. Lets tests verify that
+    /// `stop()` releases the handle so a later enqueue can start processing.
+    var test_hasImportTask: Bool { importTask != nil }
+}
+#endif
