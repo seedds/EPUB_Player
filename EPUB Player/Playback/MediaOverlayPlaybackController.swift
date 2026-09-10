@@ -130,7 +130,16 @@ final class MediaOverlayPlaybackController: ObservableObject {
         }
     }
 
-    @Published private(set) var state: State = .unavailable
+    /// Also owns the screen-awake flag: iOS must not dim or lock mid-read-aloud,
+    /// and auto-lock must return for every non-playing state. Keyed off the
+    /// controller's own state (and reset in `deinit`) rather than a view-level
+    /// `.onChange`, which died with the view when the reader was popped while
+    /// still playing with the chapter list on top, leaving the screen awake.
+    @Published private(set) var state: State = .unavailable {
+        didSet {
+            UIApplication.shared.isIdleTimerDisabled = state.isPlaying
+        }
+    }
     @Published private(set) var clips: [EPUBMediaOverlayClip] = []
     @Published private(set) var currentClipIndex: Int?
     @Published private(set) var canJumpBackward = false
@@ -1352,10 +1361,12 @@ final class MediaOverlayPlaybackController: ObservableObject {
         // lifetime. Off the main thread (the AVPlayer APIs require main), fall
         // back to a synchronous hop.
         if Thread.isMainThread {
+            UIApplication.shared.isIdleTimerDisabled = false
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             resources.teardown()
         } else {
             DispatchQueue.main.sync {
+                UIApplication.shared.isIdleTimerDisabled = false
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
                 resources.teardown()
             }
