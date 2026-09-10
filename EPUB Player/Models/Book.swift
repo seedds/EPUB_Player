@@ -389,7 +389,7 @@ extension Book {
         }
         // Resolve without creating the covers directory: this runs on the
         // library-list read path per row per body pass.
-        return try AppStorage.containedFileURL(base: AppStorage.coversDirectoryURL(), storedPath: storedPath)
+        return try AppStorage.containedFileURL(base: AppStorage.coversDirectory(create: false), storedPath: storedPath)
     }
 
     func resolvedMediaOverlayJSONURL() throws -> URL? {
