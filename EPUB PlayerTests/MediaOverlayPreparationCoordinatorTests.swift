@@ -16,12 +16,10 @@ final class MediaOverlayPreparationCoordinatorTests: XCTestCase {
         // in-flight preparation from a prior suite so it can't mutate the task
         // map mid-test.
         await coordinator.test_cancelAllPreparations()
-        coordinator.test_reset()
     }
 
     override func tearDown() async throws {
         await coordinator.test_cancelAllPreparations()
-        coordinator.test_reset()
         try await super.tearDown()
     }
 

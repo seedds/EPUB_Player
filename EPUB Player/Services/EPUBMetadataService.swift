@@ -7,50 +7,25 @@
 
 import Foundation
 
-struct EPUBMetadata {
+/// The two package fields the library actually displays. (Language and
+/// identifier were parsed for years and never read.)
+nonisolated struct EPUBMetadata {
     var title: String?
     var author: String?
-    var language: String?
-    var identifier: String?
-    var coverImagePath: String?
-
-    nonisolated init(
-        title: String? = nil,
-        author: String? = nil,
-        language: String? = nil,
-        identifier: String? = nil,
-        coverImagePath: String? = nil
-    ) {
-        self.title = title
-        self.author = author
-        self.language = language
-        self.identifier = identifier
-        self.coverImagePath = coverImagePath
-    }
 }
 
-struct EPUBPackageInfo {
-    struct ManifestItem {
+nonisolated struct EPUBPackageInfo {
+    nonisolated struct ManifestItem {
         let id: String
         let href: String
         let mediaType: String?
         let mediaOverlay: String?
         let properties: Set<String>
-
-        nonisolated init(id: String, href: String, mediaType: String?, mediaOverlay: String?, properties: Set<String>) {
-            self.id = id
-            self.href = href
-            self.mediaType = mediaType
-            self.mediaOverlay = mediaOverlay
-            self.properties = properties
-        }
     }
 
     var packageURL: URL
     var title: String?
     var creator: String?
-    var language: String?
-    var identifier: String?
     var coverItemId: String?
     var mediaDuration: Double?
     var manifestItems: [ManifestItem] = []
@@ -58,36 +33,14 @@ struct EPUBPackageInfo {
     /// manifest — defines reading order, so this drives media-overlay document
     /// ordering. Empty when the OPF declares no spine.
     var spineItemRefs: [String] = []
-
-    nonisolated init(
-        packageURL: URL,
-        title: String? = nil,
-        creator: String? = nil,
-        language: String? = nil,
-        identifier: String? = nil,
-        coverItemId: String? = nil,
-        mediaDuration: Double? = nil,
-        manifestItems: [ManifestItem] = [],
-        spineItemRefs: [String] = []
-    ) {
-        self.packageURL = packageURL
-        self.title = title
-        self.creator = creator
-        self.language = language
-        self.identifier = identifier
-        self.coverItemId = coverItemId
-        self.mediaDuration = mediaDuration
-        self.manifestItems = manifestItems
-        self.spineItemRefs = spineItemRefs
-    }
 }
 
-struct EPUBArchiveAsset {
+nonisolated struct EPUBArchiveAsset {
     let path: String
     let mediaType: String?
     let data: Data
 
-    nonisolated var pathExtension: String {
+    var pathExtension: String {
         let fileExtension = URL(fileURLWithPath: path).pathExtension
         if !fileExtension.isEmpty {
             return fileExtension
@@ -122,10 +75,7 @@ enum EPUBMetadataService {
     nonisolated static func metadata(from package: EPUBPackageInfo) -> EPUBMetadata {
         EPUBMetadata(
             title: clean(package.title),
-            author: clean(package.creator),
-            language: clean(package.language),
-            identifier: clean(package.identifier),
-            coverImagePath: nil
+            author: clean(package.creator)
         )
     }
 
@@ -261,7 +211,7 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
         let name = localName(elementName)
 
         switch name {
-        case "title", "creator", "language", "identifier":
+        case "title", "creator":
             currentMetadataElement = name
             currentText = ""
 
@@ -322,10 +272,6 @@ nonisolated private final class OPFParser: NSObject, XMLParserDelegate {
                 package.title = text
             case "creator" where package.creator == nil:
                 package.creator = text
-            case "language" where package.language == nil:
-                package.language = text
-            case "identifier" where package.identifier == nil:
-                package.identifier = text
             case "media:duration":
                 package.mediaDuration = EPUBMediaOverlayTimeParser.seconds(from: text)
             default:

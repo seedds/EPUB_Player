@@ -43,7 +43,10 @@ enum BookImportService {
         let id: UUID
         let filename: String
         let epubFilePath: String
-        var metadata: EPUBMetadata
+        let metadata: EPUBMetadata
+        /// The committed cover's stored filename. Nil until `applyPreparedImport`
+        /// promotes the staged cover, and nil for a book with no cover.
+        var coverImagePath: String?
         let fingerprint: SourceFileFingerprint
         let contentGeneration: UUID
         /// Content-document hrefs from the new EPUB manifest, used to validate
@@ -341,7 +344,6 @@ enum BookImportService {
             OperationProgress(fractionCompleted: 0.97, message: "Saving library..."),
             using: progressHandler
         )
-        store.sortBooksByImportedAt()
         store.persistNow()
 
         for bookID in overlayRetryIDs {
@@ -408,7 +410,7 @@ enum BookImportService {
                 stagedFilename: stagedCoverFilename,
                 for: preparedImport.id
             )
-            preparedImport.metadata.coverImagePath = finalCoverPath
+            preparedImport.coverImagePath = finalCoverPath
         } else {
             // No new cover: the reimported EPUB has none, so drop any prior one.
             try? BookAssetCacheService.removeCachedCover(for: preparedImport.id)
@@ -429,7 +431,6 @@ enum BookImportService {
         )
 
         if persist {
-            store.sortBooksByImportedAt()
             store.persistNow()
         }
         return book
@@ -462,7 +463,7 @@ enum BookImportService {
             existingBook.author = preparedImport.metadata.author ?? "Unknown Author"
             existingBook.originalFilename = preparedImport.filename
             existingBook.epubFilePath = preparedImport.epubFilePath
-            existingBook.coverImagePath = preparedImport.metadata.coverImagePath
+            existingBook.coverImagePath = preparedImport.coverImagePath
             // New content: reset the media-overlay cache so preparation reruns.
             existingBook.mediaOverlayJSONPath = nil
             existingBook.mediaOverlayDuration = nil
@@ -489,7 +490,7 @@ enum BookImportService {
             author: preparedImport.metadata.author ?? "Unknown Author",
             originalFilename: preparedImport.filename,
             epubFilePath: preparedImport.epubFilePath,
-            coverImagePath: preparedImport.metadata.coverImagePath,
+            coverImagePath: preparedImport.coverImagePath,
             mediaOverlayPreparationStateRawValue: MediaOverlayPreparationState.pending.rawValue,
             sourceFileSize: preparedImport.fingerprint.fileSize,
             sourceFileModifiedAt: preparedImport.fingerprint.modifiedAt,
@@ -610,7 +611,7 @@ enum BookImportService {
             using: progressHandler
         )
         let package = try await EPUBMetadataService.packageInfo(in: archive)
-        var metadata = package.map(EPUBMetadataService.metadata(from:)) ?? EPUBMetadata()
+        let metadata = package.map(EPUBMetadataService.metadata(from:)) ?? EPUBMetadata()
 
         await reportProgress(
             OperationProgress(fractionCompleted: 0.8, message: "Caching cover..."),
@@ -622,8 +623,6 @@ enum BookImportService {
         // are replacing if this import then fails or is cancelled. Both are
         // committed only in `applyPreparedImport`.
         let stagedCoverFilename = try await cacheStagedCoverImage(from: archive, package: package, bookID: bookID)
-        // The final cover path is resolved at commit; leave it nil for now.
-        metadata.coverImagePath = nil
 
         return PreparedBookImport(
             stagedLibraryFile: stagedLibraryFile,
@@ -786,16 +785,7 @@ enum BookImportService {
         _ progress: OperationProgress,
         using progressHandler: (@MainActor @Sendable (OperationProgress) -> Void)?
     ) async {
-        guard let progressHandler else {
-            return
-        }
-
-        await progressHandler(
-            OperationProgress(
-                fractionCompleted: min(max(progress.fractionCompleted, 0), 1),
-                message: progress.message
-            )
-        )
+        await progressHandler?(progress)
     }
 
     /// Books whose EPUB was found to contain no cover during this session.
@@ -1311,7 +1301,6 @@ final class MediaOverlayPreparationCoordinator {
                 let parseTask = Task.detached(priority: priority) {
                     try await EPUBMediaOverlayService.parseAndWrite(
                         at: sourceURL,
-                        bookID: bookID,
                         destinationURL: stagedManifestURL,
                         progressHandler: progressHandler
                     )
@@ -1342,12 +1331,12 @@ final class MediaOverlayPreparationCoordinator {
                 }
 
                 updatedBook.mediaOverlayJSONPath = result == nil ? nil : try AppStorage.mediaOverlayManifestURL(for: bookID).lastPathComponent
-                updatedBook.mediaOverlayDuration = result?.manifest.duration
-                updatedBook.mediaOverlayClipCount = result?.manifest.clipCount
+                updatedBook.mediaOverlayDuration = result?.duration
+                updatedBook.mediaOverlayClipCount = result?.clipCount
                 updatedBook.mediaOverlayPreparationState = .ready
                 updatedBook.mediaOverlayPreparationError = nil
                 if updatedBook.pendingClipPositionRevalidation {
-                    let clips = result?.manifest.documents.flatMap(\.clips) ?? []
+                    let clips = result?.documents.flatMap(\.clips) ?? []
                     Self.revalidateClipPositions(for: updatedBook, against: clips)
                     updatedBook.pendingClipPositionRevalidation = false
                 }
@@ -1506,15 +1495,7 @@ final class MediaOverlayPreparationCoordinator {
     }
 
     private func publishProgress(_ progress: OperationProgress, for bookID: UUID) {
-        progressSnapshots[bookID] = OperationProgress(
-            fractionCompleted: min(max(progress.fractionCompleted, 0), 1),
-            message: progress.message
-        )
-
-        guard let progress = progressSnapshots[bookID] else {
-            return
-        }
-
+        progressSnapshots[bookID] = progress
         progressObservers[bookID]?.values.forEach { observer in
             observer(progress)
         }
@@ -1539,12 +1520,6 @@ extension MediaOverlayPreparationCoordinator {
     /// Exposes the identity-guarded map cleanup used by a finished task's defer.
     func test_clearTaskEntryIfCurrent(for bookID: UUID, task: Task<Void, Never>?) {
         clearTaskEntryIfCurrent(for: bookID, task: task)
-    }
-
-    func test_reset() {
-        tasks.removeAll()
-        progressSnapshots.removeAll()
-        progressObservers.removeAll()
     }
 
     func test_isCurrentGeneration(_ generation: UUID, for bookID: UUID, store: AppStateStore) -> Bool {

@@ -11,11 +11,12 @@ import Foundation
 /// a user-facing message. One type shared by import, refresh, and media-overlay
 /// preparation, which all report the same shape.
 nonisolated struct OperationProgress: Sendable {
+    /// Always within 0…1; clamped here so no reporting hop has to.
     var fractionCompleted: Double
     var message: String
 
-    nonisolated init(fractionCompleted: Double, message: String) {
-        self.fractionCompleted = fractionCompleted
+    init(fractionCompleted: Double, message: String) {
+        self.fractionCompleted = min(max(fractionCompleted, 0), 1)
         self.message = message
     }
 }
@@ -24,25 +25,13 @@ nonisolated struct EPUBMediaOverlayManifest: Codable {
     var duration: Double?
     var documents: [EPUBMediaOverlayDocument]
 
-    nonisolated init(
-        duration: Double? = nil,
-        documents: [EPUBMediaOverlayDocument]
-    ) {
-        self.duration = duration
-        self.documents = documents
-    }
-
-    nonisolated var clipCount: Int {
+    var clipCount: Int {
         documents.reduce(0) { $0 + $1.clips.count }
     }
 }
 
 nonisolated struct EPUBMediaOverlayDocument: Codable {
     var clips: [EPUBMediaOverlayClip]
-
-    nonisolated init(clips: [EPUBMediaOverlayClip]) {
-        self.clips = clips
-    }
 }
 
 nonisolated struct EPUBMediaOverlayClip: Codable, Equatable {
@@ -63,39 +52,16 @@ nonisolated struct EPUBMediaOverlayClip: Codable, Equatable {
             String(clipEnd ?? -1)
         ].joined(separator: "|")
     }
-
-    nonisolated init(
-        textResourceHref: String,
-        fragmentID: String?,
-        audioPath: String,
-        clipBegin: Double,
-        clipEnd: Double?
-    ) {
-        self.textResourceHref = textResourceHref
-        self.fragmentID = fragmentID
-        self.audioPath = audioPath
-        self.clipBegin = clipBegin
-        self.clipEnd = clipEnd
-    }
-}
-
-nonisolated struct EPUBMediaOverlayParseResult {
-    var manifest: EPUBMediaOverlayManifest
-    var jsonURL: URL
-
-    nonisolated init(manifest: EPUBMediaOverlayManifest, jsonURL: URL) {
-        self.manifest = manifest
-        self.jsonURL = jsonURL
-    }
 }
 
 enum EPUBMediaOverlayService {
+    /// Parses the EPUB's media overlays and writes the manifest JSON to
+    /// `destinationURL`. Returns nil when the book has no usable overlays.
     nonisolated static func parseAndWrite(
         at epubURL: URL,
-        bookID: UUID,
-        destinationURL: URL? = nil,
+        destinationURL: URL,
         progressHandler: ((OperationProgress) -> Void)? = nil
-    ) async throws -> EPUBMediaOverlayParseResult? {
+    ) async throws -> EPUBMediaOverlayManifest? {
         reportProgress(
             OperationProgress(fractionCompleted: 0.05, message: "Opening EPUB..."),
             using: progressHandler
@@ -124,7 +90,6 @@ enum EPUBMediaOverlayService {
             return nil
         }
 
-        let jsonURL = try destinationURL ?? AppStorage.mediaOverlayManifestURL(for: bookID)
         let encoder = JSONEncoder()
         reportProgress(
             OperationProgress(fractionCompleted: 0.95, message: "Writing read-aloud data..."),
@@ -136,12 +101,12 @@ enum EPUBMediaOverlayService {
             return nil
         }
         let data = try encoder.encode(manifest)
-        try data.write(to: jsonURL, options: .atomic)
+        try data.write(to: destinationURL, options: .atomic)
         reportProgress(
             OperationProgress(fractionCompleted: 1, message: "Read-aloud ready"),
             using: progressHandler
         )
-        return EPUBMediaOverlayParseResult(manifest: manifest, jsonURL: jsonURL)
+        return manifest
     }
 
     nonisolated private static func parse(
@@ -149,28 +114,7 @@ enum EPUBMediaOverlayService {
         package: EPUBPackageInfo,
         progressHandler: ((OperationProgress) -> Void)? = nil
     ) async throws -> EPUBMediaOverlayManifest? {
-        let virtualRoot = EPUBMetadataService.virtualRootURL
-        return try await parseInternal(root: virtualRoot, package: package, progressHandler: progressHandler) { smilURL in
-            guard let smilPath = AppStorage.relativePath(from: smilURL.path, under: virtualRoot.path),
-                  let smilData = try await archive.data(for: smilPath)
-            else {
-                return []
-            }
-
-            return SMILParser(
-                rootURL: virtualRoot,
-                smilURL: smilURL,
-                smilData: smilData
-            ).parse()
-        }
-    }
-
-    nonisolated private static func parseInternal(
-        root: URL,
-        package: EPUBPackageInfo,
-        progressHandler: ((OperationProgress) -> Void)? = nil,
-        clipLoader: (URL) async throws -> [EPUBMediaOverlayClip]
-    ) async throws -> EPUBMediaOverlayManifest? {
+        let root = EPUBMetadataService.virtualRootURL
         let packageDirectory = package.packageURL.deletingLastPathComponent()
         var smilItemsById: [String: EPUBPackageInfo.ManifestItem] = [:]
         for item in package.manifestItems where isSMIL(item) {
@@ -223,11 +167,14 @@ enum EPUBMediaOverlayService {
                 for: smilItem.href,
                 relativeTo: packageDirectory,
                 root: root
-            ) else {
+            ),
+                  let smilPath = AppStorage.relativePath(from: smilURL.path, under: root.path),
+                  let smilData = try await archive.data(for: smilPath)
+            else {
                 continue
             }
 
-            let clips = try await clipLoader(smilURL)
+            let clips = SMILParser(rootURL: root, smilURL: smilURL, smilData: smilData).parse()
             guard !clips.isEmpty else {
                 continue
             }
@@ -290,10 +237,7 @@ enum EPUBMediaOverlayService {
         _ progress: OperationProgress,
         using progressHandler: ((OperationProgress) -> Void)?
     ) {
-        progressHandler?(OperationProgress(
-            fractionCompleted: min(max(progress.fractionCompleted, 0), 1),
-            message: progress.message
-        ))
+        progressHandler?(progress)
     }
 }
 

@@ -8,11 +8,11 @@
 import ReadiumNavigator
 
 nonisolated struct FontFamilyOption: Identifiable, Hashable {
-    nonisolated let id: String
-    nonisolated let name: String
-    nonisolated let value: FontFamily?
+    let id: String
+    let name: String
+    let value: FontFamily?
 
-    nonisolated init(name: String, value: FontFamily?) {
+    init(name: String, value: FontFamily?) {
         self.id = value?.rawValue ?? ""
         self.name = name
         self.value = value
