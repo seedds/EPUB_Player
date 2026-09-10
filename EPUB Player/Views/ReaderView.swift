@@ -1536,17 +1536,7 @@ struct ReaderView: View {
     }
 
     private func playbackLocator(for clip: EPUBMediaOverlayClip) -> Locator? {
-        guard let href = RelativeURL(epubHREF: clip.textResourceHref) else {
-            return nil
-        }
-
-        return Locator(
-            href: href,
-            mediaType: .xhtml,
-            locations: Locator.Locations(
-                fragments: clip.fragmentID.map { [$0] } ?? []
-            )
-        )
+        locator(for: EPUBReference(resourceHref: clip.textResourceHref, fragmentID: clip.fragmentID))
     }
 
     private func locator(for reference: EPUBReference) -> Locator? {
@@ -2013,7 +2003,7 @@ struct ReaderView: View {
     @MainActor
     private func applyCurrentClipDecoration(with navigator: EPUBNavigatorViewController) {
         guard let clip = playback.currentClip,
-              let href = RelativeURL(epubHREF: clip.textResourceHref)
+              let locator = playbackLocator(for: clip)
         else {
             DebugLog.shared.log("[highlight] applyCurrentClipDecoration branch=cleared-no-clip")
             pendingDecorationClipKey = nil
@@ -2032,14 +2022,6 @@ struct ReaderView: View {
 
         DebugLog.shared.log("[highlight] applyCurrentClipDecoration branch=APPLIED res=\(clipResourceHref) fragment=\(String(describing: clip.fragmentID)) clip=\(clipKey)")
         pendingDecorationClipKey = nil
-
-        let locator = Locator(
-            href: href,
-            mediaType: .xhtml,
-            locations: Locator.Locations(
-                fragments: clip.fragmentID.map { [$0] } ?? []
-            )
-        )
 
         navigator.apply(
             decorations: [
