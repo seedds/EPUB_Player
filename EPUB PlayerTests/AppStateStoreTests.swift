@@ -96,20 +96,21 @@ final class AppStateStoreTests: XCTestCase {
         store.addBook(book1)
         store.addBook(book2)
 
-        XCTAssertEqual(store.books.first?.title, "Book 2", "Most recently imported book should be first")
-        XCTAssertEqual(store.books.last?.title, "Book 1")
-        XCTAssertEqual(store.sortedBooks.first?.title, "Book 2")
+        // `books` is insertion-ordered; `sortedBooks` is the library order.
+        XCTAssertEqual(store.sortedBooks.first?.title, "Book 2", "Most recently imported book should be first")
         XCTAssertEqual(store.sortedBooks.last?.title, "Book 1")
     }
 
     func testBooksSortedByTitleAscending() async throws {
         let store = AppStateStore()
 
-        store.replaceBooks([
+        for book in [
             makeBook(title: "Zulu", author: "Author C", importedAt: 1000),
             makeBook(title: "Alpha", author: "Author B", importedAt: 2000),
             makeBook(title: "Bravo", author: "Author A", importedAt: 3000)
-        ])
+        ] {
+            store.addBook(book)
+        }
         store.booksSortOption = .titleAscending
 
         XCTAssertEqual(store.sortedBooks.map(\.title), ["Alpha", "Bravo", "Zulu"])
@@ -118,14 +119,35 @@ final class AppStateStoreTests: XCTestCase {
     func testBooksSortedByAuthorDescending() async throws {
         let store = AppStateStore()
 
-        store.replaceBooks([
+        for book in [
             makeBook(title: "Book 1", author: "Author A", importedAt: 1000),
             makeBook(title: "Book 2", author: "Author C", importedAt: 2000),
             makeBook(title: "Book 3", author: "Author B", importedAt: 3000)
-        ])
+        ] {
+            store.addBook(book)
+        }
         store.booksSortOption = .authorDescending
 
         XCTAssertEqual(store.sortedBooks.map(\.author), ["Author C", "Author B", "Author A"])
+    }
+
+    func testEqualTitlesTieBreakOnAuthorThenNewestFirst() async throws {
+        let store = AppStateStore()
+        let older = makeBook(title: "Same", author: "Zed", importedAt: 1000)
+        let newer = makeBook(title: "Same", author: "Zed", importedAt: 2000)
+        let otherAuthor = makeBook(title: "Same", author: "Abe", importedAt: 500)
+        for book in [older, newer, otherAuthor] {
+            store.addBook(book)
+        }
+
+        store.booksSortOption = .titleAscending
+        XCTAssertEqual(store.sortedBooks.map(\.id), [otherAuthor.id, newer.id, older.id], "title tie -> author asc -> newest first")
+
+        store.booksSortOption = .titleDescending
+        XCTAssertEqual(store.sortedBooks.map(\.id), [otherAuthor.id, newer.id, older.id], "descending only flips the primary key")
+
+        store.booksSortOption = .recentlyAdded
+        XCTAssertEqual(store.sortedBooks.map(\.id), [newer.id, older.id, otherAuthor.id])
     }
 
     func testSortOptionPersistsAcrossStoreInstances() async throws {
@@ -142,7 +164,8 @@ final class AppStateStoreTests: XCTestCase {
         let alpha = makeBook(title: "Alpha", author: "Author A", importedAt: 1000)
         let bravo = makeBook(title: "Bravo", author: "Author B", importedAt: 2000)
 
-        store.replaceBooks([alpha, bravo])
+        store.addBook(alpha)
+        store.addBook(bravo)
         store.booksSortOption = .titleAscending
         XCTAssertEqual(store.sortedBooks.map(\.title), ["Alpha", "Bravo"])
 
