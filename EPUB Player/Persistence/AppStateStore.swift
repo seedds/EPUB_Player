@@ -175,22 +175,25 @@ final class AppStateStore: ObservableObject {
         }
     }
 
-    /// Cached `sortedBooks`, recomputed only when `books` or `booksSortOption`
-    /// change. `BooksView.body` re-evaluates on every book mutation (each
-    /// location tick), so sorting the whole library there — with
-    /// `localizedCaseInsensitiveCompare` — was per-scroll-tick work.
     /// Set when loading or saving state.json fails, so Settings can show a
     /// non-blocking notice. Cleared on the next successful write.
     @Published private(set) var persistenceFailure: PersistenceFailure?
 
+    /// Cached `sortedBooks`, recomputed only when `books`, `booksSortOption`, or
+    /// a book's sort fields (title/author/importedAt) change. `BooksView.body`
+    /// re-evaluates on every book mutation (each location tick), so sorting the
+    /// whole library there — with `localizedCaseInsensitiveCompare` — was
+    /// per-scroll-tick work. Invalidating on *every* book publish (as the
+    /// observer once did) made the cache dead during reading.
     private var cachedSortedBooks: [Book]?
 
-    private var bookSubscriptions: [UUID: AnyCancellable] = [:]
+    private var bookSubscriptions: [UUID: [AnyCancellable]] = [:]
     private var saveTask: Task<Void, Never>?
     private var isHydratingState = false
     private var canPersistState = true
     #if DEBUG
     private var diskWriteCount = 0
+    private var sortComputeCount = 0
     #endif
 
     deinit {
@@ -218,6 +221,9 @@ final class AppStateStore: ObservableObject {
             isOrderedBefore(lhs, rhs, for: booksSortOption)
         }
         cachedSortedBooks = sorted
+        #if DEBUG
+        sortComputeCount += 1
+        #endif
         return sorted
     }
 
@@ -380,18 +386,27 @@ final class AppStateStore: ObservableObject {
     }
 
     private func observeBook(_ book: Book) {
-        bookSubscriptions[book.id] = book.objectWillChange.sink { [weak self] _ in
-            // Books are only mutated on the main actor; forwarding
-            // synchronously lets SwiftUI coalesce the invalidation with the
-            // mutation instead of deferring it a runloop turn.
+        // Books are only mutated on the main actor; forwarding synchronously
+        // lets SwiftUI coalesce the invalidation with the mutation instead of
+        // deferring it a runloop turn.
+        let forwardChange = book.objectWillChange.sink { [weak self] _ in
             MainActor.assumeIsolated {
-                // A book's own fields (title/author) feed the sort, so an
-                // in-place mutation must drop the cached order too.
-                self?.invalidateSortedBooks()
                 self?.objectWillChange.send()
                 self?.scheduleSave()
             }
         }
+        // Only the fields the sort reads may drop the cached order. Hooking
+        // `objectWillChange` here instead invalidated on every location tick.
+        let invalidateSort = Publishers.Merge3(
+            book.$title.map { _ in () },
+            book.$author.map { _ in () },
+            book.$importedAt.map { _ in () }
+        ).sink { [weak self] in
+            MainActor.assumeIsolated {
+                self?.invalidateSortedBooks()
+            }
+        }
+        bookSubscriptions[book.id] = [forwardChange, invalidateSort]
     }
 
     private func isOrderedBefore(_ lhs: Book, _ rhs: Book, for option: BooksSortOption) -> Bool {
@@ -549,5 +564,9 @@ extension AppStateStore {
     /// Number of times state has actually been flushed to disk. Lets tests
     /// verify the save debounce coalesces a burst of mutations into one write.
     var test_diskWriteCount: Int { diskWriteCount }
+
+    /// Number of times `sortedBooks` was actually re-sorted. Lets tests verify
+    /// that non-sort mutations (reading position, covers) hit the cache.
+    var test_sortComputeCount: Int { sortComputeCount }
 }
 #endif
