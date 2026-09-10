@@ -461,7 +461,8 @@ final class UploadServerController: ObservableObject {
     }
 
     private func booksJSON(store: AppStateStore) throws -> Data {
-        let books = store.books
+        // The web list follows the in-app sort.
+        let books = store.sortedBooks
         let fileManager = FileManager.default
         let dateFormatter = ISO8601DateFormatter()
 
@@ -513,7 +514,6 @@ final class UploadServerController: ObservableObject {
             storedPath: AppStorage.storedBookPath(for: filename),
             displayTitle: BookImportService.displayTitle(for:)
         )
-        store.sortBooksByImportedAt()
         store.persistNow()
     }
 
