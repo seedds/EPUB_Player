@@ -25,31 +25,16 @@ nonisolated private final class PlaybackResources: @unchecked Sendable {
     var interruptionObserver: NSObjectProtocol?
     var routeChangeObserver: NSObjectProtocol?
     var periodicTimeObserver: Any?
-    var playCommandTarget: Any?
-    var pauseCommandTarget: Any?
-    var togglePlayPauseCommandTarget: Any?
-    var skipForwardCommandTarget: Any?
-    var skipBackwardCommandTarget: Any?
+    /// Remote commands and the target token each `addTarget` returned.
+    var commandTargets: [(command: MPRemoteCommand, target: Any)] = []
 
     /// Removes all retained observers and remote-command targets. Must run on
     /// the main thread.
     func teardown() {
-        let commandCenter = MPRemoteCommandCenter.shared()
-        if let playCommandTarget {
-            commandCenter.playCommand.removeTarget(playCommandTarget)
+        for (command, target) in commandTargets {
+            command.removeTarget(target)
         }
-        if let pauseCommandTarget {
-            commandCenter.pauseCommand.removeTarget(pauseCommandTarget)
-        }
-        if let togglePlayPauseCommandTarget {
-            commandCenter.togglePlayPauseCommand.removeTarget(togglePlayPauseCommandTarget)
-        }
-        if let skipForwardCommandTarget {
-            commandCenter.skipForwardCommand.removeTarget(skipForwardCommandTarget)
-        }
-        if let skipBackwardCommandTarget {
-            commandCenter.skipBackwardCommand.removeTarget(skipBackwardCommandTarget)
-        }
+        commandTargets = []
         // Nil each token as it is removed (and drop the player at the end) so a
         // second teardown — or a teardown racing an in-flight observer
         // registration — cannot remove the same time-observer token twice, which
@@ -80,11 +65,6 @@ nonisolated private final class PlaybackResources: @unchecked Sendable {
             NotificationCenter.default.removeObserver(routeChangeObserver)
         }
         routeChangeObserver = nil
-        playCommandTarget = nil
-        pauseCommandTarget = nil
-        togglePlayPauseCommandTarget = nil
-        skipForwardCommandTarget = nil
-        skipBackwardCommandTarget = nil
         player = nil
     }
 }
@@ -197,26 +177,6 @@ final class MediaOverlayPlaybackController: ObservableObject {
     private var periodicTimeObserver: Any? {
         get { resources.periodicTimeObserver }
         set { resources.periodicTimeObserver = newValue }
-    }
-    private var playCommandTarget: Any? {
-        get { resources.playCommandTarget }
-        set { resources.playCommandTarget = newValue }
-    }
-    private var pauseCommandTarget: Any? {
-        get { resources.pauseCommandTarget }
-        set { resources.pauseCommandTarget = newValue }
-    }
-    private var togglePlayPauseCommandTarget: Any? {
-        get { resources.togglePlayPauseCommandTarget }
-        set { resources.togglePlayPauseCommandTarget = newValue }
-    }
-    private var skipForwardCommandTarget: Any? {
-        get { resources.skipForwardCommandTarget }
-        set { resources.skipForwardCommandTarget = newValue }
-    }
-    private var skipBackwardCommandTarget: Any? {
-        get { resources.skipBackwardCommandTarget }
-        set { resources.skipBackwardCommandTarget = newValue }
     }
     private var loadedAudioPath: String?
     private var currentBookID: UUID?
@@ -1149,25 +1109,32 @@ final class MediaOverlayPlaybackController: ObservableObject {
         commandCenter.nextTrackCommand.isEnabled = false
         commandCenter.previousTrackCommand.isEnabled = false
 
-        playCommandTarget = commandCenter.playCommand.addTarget { [weak self] _ in
+        func register(
+            _ command: MPRemoteCommand,
+            _ handler: @escaping (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus
+        ) {
+            resources.commandTargets.append((command, command.addTarget(handler: handler)))
+        }
+
+        register(commandCenter.playCommand) { [weak self] _ in
             guard let self else { return .commandFailed }
             self.play(reason: "remote.play")
             return .success
         }
 
-        pauseCommandTarget = commandCenter.pauseCommand.addTarget { [weak self] _ in
+        register(commandCenter.pauseCommand) { [weak self] _ in
             guard let self else { return .commandFailed }
             self.pause(reason: "remote.pause")
             return .success
         }
 
-        togglePlayPauseCommandTarget = commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
+        register(commandCenter.togglePlayPauseCommand) { [weak self] _ in
             guard let self else { return .commandFailed }
             self.togglePlayback()
             return .success
         }
 
-        skipForwardCommandTarget = commandCenter.skipForwardCommand.addTarget { [weak self] _ in
+        register(commandCenter.skipForwardCommand) { [weak self] _ in
             guard let self else { return .commandFailed }
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -1176,7 +1143,7 @@ final class MediaOverlayPlaybackController: ObservableObject {
             return .success
         }
 
-        skipBackwardCommandTarget = commandCenter.skipBackwardCommand.addTarget { [weak self] _ in
+        register(commandCenter.skipBackwardCommand) { [weak self] _ in
             guard let self else { return .commandFailed }
             Task { @MainActor [weak self] in
                 guard let self else { return }
