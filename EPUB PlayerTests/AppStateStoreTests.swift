@@ -151,6 +151,30 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.sortedBooks.map(\.title), ["Aaron", "Alpha"])
     }
 
+    func testSortCacheSurvivesNonSortMutations() async throws {
+        // Reading position, cover, and overlay mutations fire on every scroll
+        // tick / preparation step. None of them feed the sort, so none may drop
+        // the cached order; only title/author/importedAt do.
+        let alpha = makeBook(title: "Alpha", author: "Author A", importedAt: 1000)
+        let bravo = makeBook(title: "Bravo", author: "Author B", importedAt: 2000)
+        store.addBook(alpha)
+        store.addBook(bravo)
+        store.booksSortOption = .titleAscending
+        XCTAssertEqual(store.sortedBooks.map(\.title), ["Alpha", "Bravo"])
+        let baseline = store.test_sortComputeCount
+
+        alpha.updateLastLocation("{\"href\":\"chapter1.xhtml\"}")
+        alpha.coverImagePath = "cover.png"
+        bravo.mediaOverlayPreparationState = .ready
+        bravo.mediaOverlayClipCount = 12
+        XCTAssertEqual(store.sortedBooks.map(\.title), ["Alpha", "Bravo"])
+        XCTAssertEqual(store.test_sortComputeCount, baseline, "Non-sort mutations must hit the cache")
+
+        bravo.title = "Aaron"
+        XCTAssertEqual(store.sortedBooks.map(\.title), ["Aaron", "Alpha"])
+        XCTAssertEqual(store.test_sortComputeCount, baseline + 1, "A title change must re-sort exactly once")
+    }
+
     func testDebouncedSave() async throws {
         // A burst of synchronous mutations must coalesce into a single disk
         // write. Before the CancellationError-guard fix, every cancelled save
