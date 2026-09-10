@@ -9,14 +9,11 @@ import Foundation
 import Network
 
 enum LocalUploadServerError: LocalizedError {
-    case invalidPort
     case portInUse(UInt16)
     case failedToStart(String)
 
     var errorDescription: String? {
         switch self {
-        case .invalidPort:
-            "The upload server port is invalid."
         case .portInUse(let port):
             "Port \(port) is already in use. Stop the other app using it or choose a different port in the Upload tab."
         case .failedToStart(let reason):
@@ -100,9 +97,7 @@ final class LocalUploadServer {
 
     func start() throws {
         guard listener == nil else { return }
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            throw LocalUploadServerError.invalidPort
-        }
+        let nwPort = NWEndpoint.Port(integerLiteral: port)
 
         Self.removeStalePartialUploads()
 
