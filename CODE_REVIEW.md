@@ -417,3 +417,54 @@ with the code they covered).
   deletions; grep for each removed symbol returns nothing.
 - After step 8: `curl -F file=@x.epub` returns 4xx; `curl -H 'Content-Length: 0'` returns 4xx;
   `HEAD /` returns no body.
+
+
+---
+
+# Second pass (2026-09-10)
+
+A fresh critical read of the code after the four batches above landed. Everything below is
+implemented; each item names its commit.
+
+## Bugs fixed
+
+| # | Finding | Fix |
+|---|---|---|
+| A1 | Under the System theme, every scene activation and colour-scheme flip forced the reading background to White/Black, wiping a chosen Sepia/Gray/Dark Gray. | `ReaderView.themeSyncedBackground`: only a theme change resets; other triggers re-sync a background only when it already is a theme default. 4 tests. |
+| A2 | The `sortedBooks` cache from A3 was invalidated on every `Book.objectWillChange`, including the per-scroll-tick `lastLocatorJSON` write, so it was dead while reading. | Invalidate from the `$title/$author/$importedAt` publishers only. `test_sortComputeCount` + test. |
+| A3 | The A21 fix still gated the idle-timer reset on the chapter list / playing state its own comment said it must not gate on; a two-level pop while playing left the screen awake and the audio session active. | `MediaOverlayPlaybackController.state.didSet` owns `isIdleTimerDisabled`, reset in `deinit`; the three view-level writes are gone. Test. |
+| A4 | `UploadServerController.stop()` cancelled the import task without clearing the handle; an upload finishing while it unwound was queued and never processed, and the old task's `defer` reset the new task's progress. | `stop()` nils the handle; the trailing reset is identity-guarded. Test. |
+| A5 | The refresh branch that prepares a new/changed file never cleaned up its staged cover on any throw (name collision, cancellation, commit failure); nothing sweeps `Cache/Covers`. Staged manifests in `Cache/MediaOverlays` were never swept after a crash. | `cleanupPreparedImport` on the refresh failure path; `resumePendingBooks` sweeps dot-files older than the staging age. 2 tests. |
+| A6 | The overlay manifest was fully JSON-decoded on the main actor twice per book open and once per existing book on every refresh. | Presence/size gate (`hasOverlayManifest`) at the three gating sites; the refresh repair gate decodes detached (`overlayCacheIsValid`). 2 tests. |
+| A7 | `restoreMissingCovers` re-opened and re-parsed every cover-less EPUB on every foreground. | Session set of known cover-less books, cleared on re-import. Test. |
+| A8 | `EPUBArchive.data(for:)` mapped `CancellationError` to `.corruptEntry`. | Rethrow cancellation before the mapping. |
+| A9 | A `Book` record that failed to decode was dropped and permanently deleted by the next save with no copy. | Count dropped records; copy `state.json` to `state-partial-<ts>.json` once. Test. |
+| A10 | Pushing the chapter list forced a synchronous full-state write. | `persistLastPlayedClip(immediately:)` moved below the guard. |
+| A11 | A blank upload filename fell back to `"upload.epub"` and accepted arbitrary bytes as an EPUB. | `sanitizedFilenameOrNil` → nil → 415. Test. |
+| A12 | Two `persistNow()` calls in the preparation coordinator bought nothing (a persisted `.processing` resumes as `.pending`) and cost N synchronous encodes at launch. | Removed. |
+
+## Ablation applied
+
+Removed: `EPUBMediaOverlayParseResult`; `parseAndWrite`'s `bookID` param and optional
+destination; `parseInternal` (inlined); `EPUBMetadata`/`EPUBPackageInfo` `language`/`identifier`
+and their OPF branches; `EPUBMetadata.coverImagePath` (now `PreparedBookImport.coverImagePath`);
+`EPUBArchive.validateEPUB(at:)`; ~95 lines of `nonisolated init` restating synthesized inits;
+`AppStateStore.replaceBooks` (test-only), `sortBooksByImportedAt`, and the secondary
+importedAt ordering of `books`; the seven-function comparator ladder (one lazy chain per
+option); `LocalUploadServerError.invalidPort`; `MediaOverlayPreparationCoordinator.test_reset`;
+two of three `Locator` builders in `ReaderView`; the five `*CommandTarget` fields; the
+create/no-create `AppStorage` directory pairs; three `OperationProgress` clampers.
+
+Kept after ablation: `ClipLocationMatcher` parallel arrays, `PlaybackResources`, the
+coordinator singleton with `store:` threading, `SavedPositionRecord`, the upload closure
+forwarding, `uploadPageHTML` inline.
+
+File organisation: `BookImportService.swift` → `BookImportService.swift`,
+`BookAssetCacheService.swift`, `MediaOverlayPreparationCoordinator.swift`; `ReaderView.swift` →
+`ReaderView.swift`, `ReaderContentsScreen.swift`, `MediaOverlayPlaybackBar.swift`,
+`EPUBNavigatorHost.swift`. Pure moves, no logic change.
+
+Behaviour change to note: the upload page's `/api/books` list now follows the in-app sort
+instead of always newest-first.
+
+Tests: 156 → 169, all green.
