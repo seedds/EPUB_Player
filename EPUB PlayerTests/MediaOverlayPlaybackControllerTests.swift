@@ -4,6 +4,7 @@
 //
 
 import AVFoundation
+import UIKit
 import XCTest
 @testable import EPUBPlayer
 
@@ -62,6 +63,29 @@ final class MediaOverlayPlaybackControllerTests: XCTestCase {
                 clipEnd: Double(index + 1) * 5
             )
         }
+    }
+
+    /// Auto-lock follows the controller's own state, so it is restored even on
+    /// paths where the reader view (and its `.onChange` handlers) is already
+    /// gone — e.g. popping two levels while playing with the chapter list on top.
+    func testIdleTimerFollowsPlaybackState() async throws {
+        let audioURL = try AudioFixture.makeSilentFile(seconds: 5)
+        controller.configureForTesting(
+            clips: [makeClip(audioPath: "audio.m4a", fragmentID: "p1")],
+            audioURLResolver: { _ in audioURL }
+        )
+
+        controller.play(reason: "test")
+        await controller.test_awaitStartTask()
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled, "Playing must keep the screen awake")
+
+        controller.pause(reason: "test")
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled, "Pausing must restore auto-lock")
+
+        controller.play(reason: "test")
+        await controller.test_awaitStartTask()
+        controller.test_teardown()
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled, "Stopping must restore auto-lock")
     }
 
     /// A clip with an explicit `clipEnd` (the normal SMIL case) must still get

@@ -150,30 +150,24 @@ struct ReaderView: View {
             await openBook()
         }
         .onDisappear {
-            persistLastPlayedClip(immediately: true)
             isPlaybackSpeedControlPresented = false
             isReaderSettingsControlPresented = false
             // Don't tear down playback when disappearing because we pushed the
             // chapters/bookmarks screen on top of the reader; only stop when the
-            // reader is actually being closed. Note: the chapter screen can be on
-            // top *and* playing when the reader is popped (e.g. a back-button
-            // long-press pops two levels at once), so the idle-timer reset below
-            // must not be gated on either condition.
+            // reader is actually being closed. Auto-lock is owned by the
+            // playback controller (keyed off its state, reset in its deinit), so
+            // nothing here has to restore it — including the two-level pop with
+            // the chapter list on top while still playing.
             guard !isChapterListPresented else {
-                // Still let the screen sleep again if playback isn't active.
-                if !playback.state.isPlaying {
-                    UIApplication.shared.isIdleTimerDisabled = false
-                }
                 return
             }
+            // Below the guard on purpose: pushing the chapter list is not a
+            // reason for a synchronous full-state write; the debounced save from
+            // the last clip change already covers it.
+            persistLastPlayedClip(immediately: true)
             lastHandledPlaybackStartClipKey = nil
             pendingDecorationClipKey = nil
             backgroundEnteredAt = nil
-            // The reader is being closed: unconditionally restore auto-lock. The
-            // `.onChange(of: playback.state)` handler that normally does this
-            // dies with the view, so a reader popped while still playing would
-            // otherwise leave the screen awake indefinitely.
-            UIApplication.shared.isIdleTimerDisabled = false
             playback.stop(reason: "readerView.onDisappear")
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -266,7 +260,7 @@ struct ReaderView: View {
             // applied, and any previously-corrupted background self-heals.
             if case .ready(_, let navigator) = state,
                ReaderSettings.appTheme(from: store.themeRawValue) == .system {
-                applyThemeBackground()
+                applyThemeBackground(isThemeChange: false)
                 applyReaderPreferences(to: navigator)
             }
             if let backgroundEnteredAt {
@@ -361,17 +355,39 @@ struct ReaderView: View {
         )
     }
 
-    /// Forces the reading background to match the current theme (light -> white,
-    /// dark -> black). System resolves via the device color scheme.
+    /// Re-syncs the reading background with the theme. See
+    /// `themeSyncedBackground` for when this is allowed to overwrite a
+    /// user-chosen background.
     @MainActor
-    private func applyThemeBackground() {
-        let background = ReaderSettings.defaultBackground(
-            forTheme: ReaderSettings.appTheme(from: store.themeRawValue),
-            colorScheme: colorScheme
+    private func applyThemeBackground(isThemeChange: Bool) {
+        let background = Self.themeSyncedBackground(
+            current: ReaderSettings.readingBackground(from: store.readingBackgroundRawValue),
+            theme: ReaderSettings.appTheme(from: store.themeRawValue),
+            colorScheme: colorScheme,
+            isThemeChange: isThemeChange
         )
         if store.readingBackgroundRawValue != background.rawValue {
             store.readingBackgroundRawValue = background.rawValue
         }
+    }
+
+    /// The background to apply when the theme or colour scheme settles. An
+    /// explicit theme change always resets to the theme default (White/Black,
+    /// as Settings promises). Any other trigger — scene activation, a
+    /// colour-scheme flip — only re-syncs a background that already *is* a theme
+    /// default, so a deliberately chosen Sepia/Gray/Dark Gray survives
+    /// backgrounding the app. Previously every foreground under the System
+    /// theme silently reset it to White.
+    nonisolated static func themeSyncedBackground(
+        current: ReadingBackgroundOption,
+        theme: AppThemeOption,
+        colorScheme: ColorScheme,
+        isThemeChange: Bool
+    ) -> ReadingBackgroundOption {
+        guard isThemeChange || current == .white || current == .black else {
+            return current
+        }
+        return ReaderSettings.defaultBackground(forTheme: theme, colorScheme: colorScheme)
     }
 
     @ViewBuilder
@@ -385,11 +401,6 @@ struct ReaderView: View {
                 handleCurrentClipChange(oldIndex: oldIndex, newIndex: newIndex, navigator: navigator)
             }
             .onChange(of: playback.state) { oldValue, newValue in
-                // Keep the screen fully awake while reading aloud so iOS does
-                // not dim or lock the device mid-playback; restore normal
-                // auto-lock for every non-playing state.
-                UIApplication.shared.isIdleTimerDisabled = newValue.isPlaying
-
                 if oldValue.isPlaying && !newValue.isPlaying {
                     lastHandledPlaybackStartClipKey = nil
                     // Defer history off the immediate state change so the
@@ -446,7 +457,7 @@ struct ReaderView: View {
                 }
             }
             .onChange(of: store.themeRawValue) { _, _ in
-                applyThemeBackground()
+                applyThemeBackground(isThemeChange: true)
                 applyReaderPreferences(to: navigator)
             }
             .onChange(of: store.readingBackgroundRawValue) { _, _ in
@@ -469,7 +480,7 @@ struct ReaderView: View {
                     return
                 }
                 if ReaderSettings.appTheme(from: store.themeRawValue) == .system {
-                    applyThemeBackground()
+                    applyThemeBackground(isThemeChange: false)
                     applyReaderPreferences(to: navigator)
                 }
             }

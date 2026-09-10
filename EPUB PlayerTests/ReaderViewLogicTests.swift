@@ -3,6 +3,7 @@
 //  EPUB PlayerTests
 //
 
+import SwiftUI
 import XCTest
 @testable import EPUBPlayer
 
@@ -79,6 +80,56 @@ final class ReaderViewLogicTests: XCTestCase {
                 isReloadingOverlays: true,
                 hasLoadedClips: false
             )
+        )
+    }
+
+    // MARK: - themeSyncedBackground
+
+    func testForegroundKeepsUserChosenBackgroundUnderSystemTheme() {
+        // Returning to the app is not a theme change: a deliberately chosen
+        // Sepia must survive. Previously every foreground reset it to White.
+        XCTAssertEqual(
+            ReaderView.themeSyncedBackground(current: .sepia, theme: .system, colorScheme: .light, isThemeChange: false),
+            .sepia
+        )
+        XCTAssertEqual(
+            ReaderView.themeSyncedBackground(current: .darkGray, theme: .system, colorScheme: .dark, isThemeChange: false),
+            .darkGray
+        )
+    }
+
+    func testForegroundResyncsThemeDefaultBackgroundToNewScheme() {
+        // White is the light default; the device went dark while backgrounded,
+        // so the default background follows it to Black.
+        XCTAssertEqual(
+            ReaderView.themeSyncedBackground(current: .white, theme: .system, colorScheme: .dark, isThemeChange: false),
+            .black
+        )
+        XCTAssertEqual(
+            ReaderView.themeSyncedBackground(current: .black, theme: .system, colorScheme: .light, isThemeChange: false),
+            .white
+        )
+    }
+
+    func testThemeChangeResetsAnyBackground() {
+        XCTAssertEqual(
+            ReaderView.themeSyncedBackground(current: .sepia, theme: .system, colorScheme: .dark, isThemeChange: true),
+            .black
+        )
+        XCTAssertEqual(
+            ReaderView.themeSyncedBackground(current: .gray, theme: .light, colorScheme: .dark, isThemeChange: true),
+            .white
+        )
+    }
+
+    func testFixedThemeIgnoresDeviceScheme() {
+        XCTAssertEqual(
+            ReaderView.themeSyncedBackground(current: .white, theme: .light, colorScheme: .dark, isThemeChange: false),
+            .white
+        )
+        XCTAssertEqual(
+            ReaderView.themeSyncedBackground(current: .black, theme: .dark, colorScheme: .light, isThemeChange: false),
+            .black
         )
     }
 
