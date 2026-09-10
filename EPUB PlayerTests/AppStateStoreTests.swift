@@ -248,6 +248,12 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(reloadedStore.fontSize, 20)
         XCTAssertEqual(reloadedStore.uploadServerPort, ReaderSettings.defaultUploadServerPort)
         XCTAssertEqual(reloadedStore.booksSortOption, .recentlyAdded)
+
+        let backups = try FileManager.default.contentsOfDirectory(
+            at: try AppStorage.stateURL().deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("state-") && $0.lastPathComponent != "state.json" }
+        XCTAssertTrue(backups.isEmpty, "Missing keys are not dropped records; nothing to back up")
     }
 
     func testStateSurvivesCorruptBookRecord() async throws {
@@ -270,6 +276,17 @@ final class AppStateStoreTests: XCTestCase {
 
         let reloadedStore = AppStateStore()
         XCTAssertEqual(reloadedStore.books.map(\.title), ["Intact Book"])
+
+        // The dropped record is gone from memory and will be gone from disk at
+        // the next save; the original file must have been copied aside first.
+        let stateURL = try AppStorage.stateURL()
+        let backups = try FileManager.default.contentsOfDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("state-partial-") }
+        XCTAssertEqual(backups.count, 1, "Dropping an undecodable record must back the file up once")
+        XCTAssertEqual(try Data(contentsOf: backups[0]), Data(stateJSON.utf8))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stateURL.path), "A partial backup copies; the live file stays")
     }
 
     func testUnreadableStateIsBackedUpBeforeOverwriting() async throws {
