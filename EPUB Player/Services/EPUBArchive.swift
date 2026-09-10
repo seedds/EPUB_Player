@@ -85,11 +85,17 @@ struct EPUBArchive {
         // and time too).
         let accumulator = DataAccumulator(byteLimit: Int(Self.maxEntryBytes))
         do {
+            try Task.checkCancellation()
             _ = try await archive.extract(entry, skipCRC32: true) { chunk in
                 try accumulator.append(chunk)
             }
         } catch is DataAccumulator.LimitExceeded {
             throw EPUBArchiveError.entryTooLarge(path)
+        } catch is CancellationError {
+            // A cancelled import or refresh is not a corrupt file. Mapping it to
+            // `.corruptEntry` showed the user a bogus "corrupt ZIP entry" and
+            // stopped the refresh loop's `catch is CancellationError` matching.
+            throw CancellationError()
         } catch {
             throw EPUBArchiveError.corruptEntry(path)
         }
