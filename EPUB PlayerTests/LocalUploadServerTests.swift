@@ -22,6 +22,14 @@ final class LocalUploadServerTests: XCTestCase {
         XCTAssertEqual(request?.uploadFilename, "My Book.epub")
     }
 
+    func testHTTPRequestRejectsUploadFilenameThatSanitisesToNothing() {
+        // `sanitizedFilename` falls back to the literal "upload.epub", which
+        // would let arbitrary bytes through as an EPUB. A blank name is nil.
+        let request = HTTPUploadRequest.parse(headerData: Data("POST /upload?filename=%20%20 HTTP/1.1\r\nContent-Length: 1\r\n\r\n".utf8))
+
+        XCTAssertNil(request?.uploadFilename, "A filename that sanitises to nothing must not default to upload.epub")
+    }
+
     func testHTTPRequestRejectsDuplicateContentLength() {
         // A conflicting duplicate Content-Length is a request-smuggling vector.
         let request = HTTPUploadRequest.parse(headerData: Data(
